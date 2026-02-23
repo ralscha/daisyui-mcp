@@ -62,3 +62,9 @@ tasks:
     cmds:
       - go run ./cmd/update
       - task: build
+      
+  release:
+    cmds:
+      - git tag -a v1.0.0 -m "Initial release"
+      - git push origin v1.0.0
+      - goreleaser release      
