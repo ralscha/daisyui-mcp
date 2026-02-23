@@ -1,0 +1,64 @@
+version: '3'
+
+vars:
+  SERVER_BIN: bin/daisyui-server{{exeExt}}
+  UPDATE_BIN: bin/daisyui-update{{exeExt}}
+
+tasks:
+  default:
+    desc: List all available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  format:
+    desc: Format all Go source files
+    cmds:
+      - go fix ./...
+      - go fmt ./...
+
+  build:
+    desc: Build all binaries into bin/
+    deps: [build:server, build:update]
+
+  build:server:
+    desc: Build the MCP server binary
+    cmds:
+      - go build -ldflags="-s -w" -trimpath -o {{.SERVER_BIN}} ./cmd/server
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+      - 'docs/**/*.md'
+      - 'components/**/*.md'
+      - 'guide/**/*.md'
+    generates:
+      - '{{.SERVER_BIN}}'
+
+  build:update:
+    desc: Build the component updater binary
+    cmds:
+      - go build -o {{.UPDATE_BIN}} ./cmd/update
+    sources:
+      - cmd/update/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.UPDATE_BIN}}'
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  lint:
+    desc: Run golangci-lint in a Docker container
+    cmds:
+      - docker run --rm -v {{toSlash .ROOT_DIR}}:/app -w /app golangci/golangci-lint:v2.9.0 golangci-lint run -v --timeout 5m
+
+  update:
+    desc: Fetch latest DaisyUI docs and rebuild MCP server
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - go run ./cmd/update
+      - task: build
