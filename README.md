@@ -19,6 +19,8 @@
 | `get_base_style_docs` | Get the daisyUI base/reset styles documentation |
 | `get_utilities_docs` | Get the daisyUI utility classes and CSS variables documentation |
 | `get_layout_typography_docs` | Get the daisyUI layout and typography documentation |
+| `generate_theme` | Generate a complete DaisyUI 5 custom theme CSS based on provided colors |
+| `generate_theme_from_image` | Extracts a color palette from a local or remote image and generates a complete DaisyUI 5 custom theme CSS |
 
 
 ## Installation
@@ -30,8 +32,6 @@ Requires [Go](https://go.dev) and [Task](https://taskfile.dev).
 ```bash
 git clone https://github.com/your-org/daisyui-mcp.git
 cd daisyui-mcp
-
-# Build both binaries into bin/
 task build
 ```
 

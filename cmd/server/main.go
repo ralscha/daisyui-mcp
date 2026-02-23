@@ -10,6 +10,7 @@ import (
 
 	daisyuimcp "daisyui-mcp"
 	"daisyui-mcp/internal/components"
+	"daisyui-mcp/internal/theme"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -39,6 +40,30 @@ type GetComponentInput struct {
 }
 type GetColorPaletteInput struct{}
 type GetGuideInput struct{}
+type GenerateThemeInput struct {
+	Primary   string `json:"primary" jsonschema:"Primary color in Hex format (e.g. '#ff0000'). Required."`
+	Secondary string `json:"secondary,omitempty" jsonschema:"Secondary color in Hex format. Optional."`
+	Accent    string `json:"accent,omitempty" jsonschema:"Accent color in Hex format. Optional."`
+	Neutral   string `json:"neutral,omitempty" jsonschema:"Neutral color in Hex format. Optional."`
+	Base100   string `json:"base_100,omitempty" jsonschema:"Base 100 color (background) in Hex format. Optional."`
+	Info      string `json:"info,omitempty" jsonschema:"Info color in Hex format. Optional."`
+	Success   string `json:"success,omitempty" jsonschema:"Success color in Hex format. Optional."`
+	Warning   string `json:"warning,omitempty" jsonschema:"Warning color in Hex format. Optional."`
+	Error     string `json:"error,omitempty" jsonschema:"Error color in Hex format. Optional."`
+
+	RadiusSelector string `json:"radius_selector,omitempty" jsonschema:"Radius selector. Optional."`
+	RadiusField    string `json:"radius_field,omitempty" jsonschema:"Radius field. Optional."`
+	RadiusBox      string `json:"radius_box,omitempty" jsonschema:"Radius box. Optional."`
+	SizeSelector   string `json:"size_selector,omitempty" jsonschema:"Size selector. Optional."`
+	SizeField      string `json:"size_field,omitempty" jsonschema:"Size field. Optional."`
+	Border         string `json:"border,omitempty" jsonschema:"Border. Optional."`
+	Depth          string `json:"depth,omitempty" jsonschema:"Depth. Optional."`
+	Noise          string `json:"noise,omitempty" jsonschema:"Noise. Optional."`
+}
+type GenerateThemeFromImageInput struct {
+	ImagePath string `json:"image_path,omitempty" jsonschema:"Local file path to the image. Either image_path or image_url must be provided."`
+	ImageURL  string `json:"image_url,omitempty" jsonschema:"URL to the image. Either image_path or image_url must be provided."`
+}
 
 func main() {
 	fsys, fsDir := componentSource()
@@ -321,6 +346,109 @@ func main() {
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{
 					&mcp.TextContent{Text: string(daisyuimcp.GuideLayoutTypography)},
+				},
+			}, nil, nil
+		},
+	)
+
+	mcp.AddTool(
+		server,
+		&mcp.Tool{
+			Name: "generate_theme",
+			Description: "Generate a complete DaisyUI 5 custom theme CSS based on provided colors. " +
+				"Takes a primary color (required) and optional secondary, accent, neutral, base-100, etc. " +
+				"Automatically calculates appropriate -content colors for contrast and base-200/300 shades. " +
+				"Returns the CSS code for the custom theme.",
+		},
+		func(
+			_ context.Context,
+			_ *mcp.CallToolRequest,
+			input GenerateThemeInput,
+		) (*mcp.CallToolResult, any, error) {
+			themeInput := theme.ThemeInput{
+				Primary:        input.Primary,
+				Secondary:      input.Secondary,
+				Accent:         input.Accent,
+				Neutral:        input.Neutral,
+				Base100:        input.Base100,
+				Info:           input.Info,
+				Success:        input.Success,
+				Warning:        input.Warning,
+				Error:          input.Error,
+				RadiusSelector: input.RadiusSelector,
+				RadiusField:    input.RadiusField,
+				RadiusBox:      input.RadiusBox,
+				SizeSelector:   input.SizeSelector,
+				SizeField:      input.SizeField,
+				Border:         input.Border,
+				Depth:          input.Depth,
+				Noise:          input.Noise,
+			}
+			css := theme.GenerateThemeCSS(themeInput)
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: css},
+				},
+			}, nil, nil
+		},
+	)
+
+	mcp.AddTool(
+		server,
+		&mcp.Tool{
+			Name: "generate_theme_from_image",
+			Description: "Extracts a color palette from a local or remote image and generates a complete DaisyUI 5 custom theme CSS. " +
+				"Provide either an image_path (local file) or image_url (remote image).",
+		},
+		func(
+			_ context.Context,
+			_ *mcp.CallToolRequest,
+			input GenerateThemeFromImageInput,
+		) (*mcp.CallToolResult, any, error) {
+			var source string
+			if input.ImageURL != "" {
+				source = input.ImageURL
+			} else if input.ImagePath != "" {
+				source = input.ImagePath
+			} else {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{
+						&mcp.TextContent{Text: "Error: Either image_path or image_url must be provided."},
+					},
+				}, nil, nil
+			}
+
+			themeInput, err := theme.ExtractThemeFromImage(source)
+			if err != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{
+						&mcp.TextContent{Text: fmt.Sprintf("Error extracting theme from image: %v", err)},
+					},
+				}, nil, nil
+			}
+
+			css := theme.GenerateThemeCSS(themeInput)
+
+			extractedColors := fmt.Sprintf("/* Extracted Colors from %s:\n", source)
+			if themeInput.Primary != "" {
+				extractedColors += fmt.Sprintf("   Primary: %s\n", themeInput.Primary)
+			}
+			if themeInput.Secondary != "" {
+				extractedColors += fmt.Sprintf("   Secondary: %s\n", themeInput.Secondary)
+			}
+			if themeInput.Accent != "" {
+				extractedColors += fmt.Sprintf("   Accent: %s\n", themeInput.Accent)
+			}
+			if themeInput.Neutral != "" {
+				extractedColors += fmt.Sprintf("   Neutral: %s\n", themeInput.Neutral)
+			}
+			extractedColors += "*/\n\n"
+
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: extractedColors + css},
 				},
 			}, nil, nil
 		},
