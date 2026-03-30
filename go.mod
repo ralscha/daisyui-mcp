@@ -6,7 +6,7 @@ require (
 	github.com/generaltso/vibrant v0.0.0-20230605224344-08d3d20033fc
 	github.com/lucasb-eyer/go-colorful v1.3.0
 	github.com/modelcontextprotocol/go-sdk v1.4.1
-	golang.org/x/image v0.37.0
+	golang.org/x/image v0.38.0
 )
 
 require (
