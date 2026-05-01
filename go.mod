@@ -5,13 +5,13 @@ go 1.26.2
 require (
 	github.com/generaltso/vibrant v0.0.0-20230605224344-08d3d20033fc
 	github.com/lucasb-eyer/go-colorful v1.4.0
-	github.com/modelcontextprotocol/go-sdk v1.5.0
+	github.com/modelcontextprotocol/go-sdk v1.6.0
 	golang.org/x/image v0.39.0
 )
 
 require (
 	github.com/dayvonjersen/sadbox v0.0.0-20120828195626-27893f92b8ce // indirect
-	github.com/google/jsonschema-go v0.4.2 // indirect
+	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
