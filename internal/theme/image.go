@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"context"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -9,21 +10,33 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/generaltso/vibrant"
 	_ "golang.org/x/image/webp"
 )
 
+var imageHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
 func ExtractThemeFromImage(imagePathOrURL string) (ThemeInput, error) {
+	return ExtractThemeFromImageContext(context.Background(), imagePathOrURL)
+}
+
+func ExtractThemeFromImageContext(ctx context.Context, imagePathOrURL string) (ThemeInput, error) {
 	var img image.Image
 	var err error
 
 	if strings.HasPrefix(imagePathOrURL, "http://") || strings.HasPrefix(imagePathOrURL, "https://") {
-		resp, err := http.Get(imagePathOrURL)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, imagePathOrURL, nil)
+		if err != nil {
+			return ThemeInput{}, fmt.Errorf("failed to create image request: %w", err)
+		}
+
+		resp, err := imageHTTPClient.Do(req)
 		if err != nil {
 			return ThemeInput{}, fmt.Errorf("failed to fetch image from URL: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
 			return ThemeInput{}, fmt.Errorf("failed to fetch image, status code: %d", resp.StatusCode)
@@ -38,7 +51,7 @@ func ExtractThemeFromImage(imagePathOrURL string) (ThemeInput, error) {
 		if err != nil {
 			return ThemeInput{}, fmt.Errorf("failed to open local image file: %w", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		img, _, err = image.Decode(file)
 		if err != nil {

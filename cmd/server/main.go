@@ -401,7 +401,7 @@ func main() {
 				"Provide either an image_path (local file) or image_url (remote image).",
 		},
 		func(
-			_ context.Context,
+			ctx context.Context,
 			_ *mcp.CallToolRequest,
 			input GenerateThemeFromImageInput,
 		) (*mcp.CallToolResult, any, error) {
@@ -419,7 +419,7 @@ func main() {
 				}, nil, nil
 			}
 
-			themeInput, err := theme.ExtractThemeFromImage(source)
+			themeInput, err := theme.ExtractThemeFromImageContext(ctx, source)
 			if err != nil {
 				return &mcp.CallToolResult{
 					IsError: true,

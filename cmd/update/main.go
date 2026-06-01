@@ -32,22 +32,32 @@ func main() {
 		fatalf("cannot determine working directory: %v", err)
 	}
 
-	componentsDir := filepath.Join(cwd, "components")
+	tempDir, err := os.MkdirTemp(cwd, ".daisyui-update-*")
+	if err != nil {
+		fatalf("cannot create temporary update directory: %v", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(tempDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not remove temporary update directory %s: %v\n", tempDir, err)
+		}
+	}()
+
+	componentsDir := filepath.Join(tempDir, "components")
 	if err := os.MkdirAll(componentsDir, 0o755); err != nil {
 		fatalf("cannot create components directory: %v", err)
 	}
 
-	docsDir := filepath.Join(cwd, "docs")
+	docsDir := filepath.Join(tempDir, "docs")
 	if err := os.MkdirAll(docsDir, 0o755); err != nil {
 		fatalf("cannot create docs directory: %v", err)
 	}
 
-	guideDir := filepath.Join(cwd, "guide")
+	guideDir := filepath.Join(tempDir, "guide")
 	if err := os.MkdirAll(guideDir, 0o755); err != nil {
 		fatalf("cannot create guide directory: %v", err)
 	}
 
-	colorsFilePath := filepath.Join(cwd, "colors.md")
+	colorsFilePath := filepath.Join(tempDir, "colors.md")
 
 	fmt.Fprintf(os.Stderr, "Fetching %s...\n", llmsURL)
 
@@ -146,6 +156,7 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "Successfully downloaded %d detailed documentation files.\n", docsCount)
 
+	colorsGenerated := false
 	sectionRe := regexp.MustCompile(`(?m)^## daisyUI 5 colors\s*$`)
 	sectionLoc := sectionRe.FindStringIndex(content)
 	if sectionLoc == nil {
@@ -164,6 +175,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error writing colors.md: %v\n", err)
 		} else {
 			fmt.Fprintln(os.Stderr, "Generated colors.md")
+			colorsGenerated = true
 		}
 	}
 
@@ -184,6 +196,27 @@ func main() {
 		guideCount++
 	}
 	fmt.Fprintf(os.Stderr, "Successfully downloaded %d guide documentation pages.\n", guideCount)
+
+	if count == 0 {
+		fatalf("no component files were generated")
+	}
+	if !colorsGenerated {
+		fatalf("colors.md was not generated")
+	}
+
+	if err := replaceDir(filepath.Join(cwd, "components"), componentsDir); err != nil {
+		fatalf("cannot replace components directory: %v", err)
+	}
+	if err := replaceDir(filepath.Join(cwd, "docs"), docsDir); err != nil {
+		fatalf("cannot replace docs directory: %v", err)
+	}
+	if err := replaceDir(filepath.Join(cwd, "guide"), guideDir); err != nil {
+		fatalf("cannot replace guide directory: %v", err)
+	}
+	if err := replaceFile(filepath.Join(cwd, "colors.md"), colorsFilePath); err != nil {
+		fatalf("cannot replace colors.md: %v", err)
+	}
+	fmt.Fprintln(os.Stderr, "Replaced generated documentation files.")
 }
 
 func downloadFile(client *http.Client, url string) ([]byte, error) {
@@ -206,4 +239,44 @@ func downloadFile(client *http.Client, url string) ([]byte, error) {
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "ERROR: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+func replaceDir(dst, src string) error {
+	backup := backupPath(dst)
+	if err := os.Rename(dst, backup); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("backup existing directory: %w", err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		if restoreErr := os.Rename(backup, dst); restoreErr != nil && !os.IsNotExist(restoreErr) {
+			return fmt.Errorf("replace directory: %w; restore failed: %v", err, restoreErr)
+		}
+		return fmt.Errorf("replace directory: %w", err)
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Errorf("remove backup: %w", err)
+	}
+	return nil
+}
+
+func replaceFile(dst, src string) error {
+	backup := backupPath(dst)
+	if err := os.Rename(dst, backup); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("backup existing file: %w", err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		if restoreErr := os.Rename(backup, dst); restoreErr != nil && !os.IsNotExist(restoreErr) {
+			return fmt.Errorf("replace file: %w; restore failed: %v", err, restoreErr)
+		}
+		return fmt.Errorf("replace file: %w", err)
+	}
+	if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove backup: %w", err)
+	}
+	return nil
+}
+
+func backupPath(dst string) string {
+	dir := filepath.Dir(dst)
+	base := filepath.Base(dst)
+	return filepath.Join(dir, fmt.Sprintf(".%s.bak-%d", base, time.Now().UnixNano()))
 }

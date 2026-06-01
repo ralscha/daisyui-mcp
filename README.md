@@ -30,7 +30,7 @@
 Requires [Go](https://go.dev) and [Task](https://taskfile.dev).
 
 ```bash
-git clone https://github.com/your-org/daisyui-mcp.git
+git clone https://github.com/ralscha/daisyui-mcp.git
 cd daisyui-mcp
 task build
 ```
