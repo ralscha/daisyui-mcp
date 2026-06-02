@@ -5,7 +5,7 @@ import "embed"
 //go:embed components
 var ComponentsFS embed.FS
 
-//go:embed all:docs
+//go:embed docs
 var DocsFS embed.FS
 
 //go:embed colors.md
