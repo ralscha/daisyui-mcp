@@ -24,6 +24,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Fetch DaisyUI docs
+        run: go run ./cmd/update
+
       - name: Run Go tests
         run: go test ./...
 
