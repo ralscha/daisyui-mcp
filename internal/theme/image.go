@@ -1,12 +1,14 @@
 package theme
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -18,13 +20,17 @@ import (
 
 var imageHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
+const (
+	maxImageBytes  = 10 << 20
+	maxImagePixels = 16_000_000
+)
+
 func ExtractThemeFromImage(imagePathOrURL string) (ThemeInput, error) {
 	return ExtractThemeFromImageContext(context.Background(), imagePathOrURL)
 }
 
 func ExtractThemeFromImageContext(ctx context.Context, imagePathOrURL string) (ThemeInput, error) {
-	var img image.Image
-	var err error
+	var data []byte
 
 	if strings.HasPrefix(imagePathOrURL, "http://") || strings.HasPrefix(imagePathOrURL, "https://") {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, imagePathOrURL, nil)
@@ -42,9 +48,9 @@ func ExtractThemeFromImageContext(ctx context.Context, imagePathOrURL string) (T
 			return ThemeInput{}, fmt.Errorf("failed to fetch image, status code: %d", resp.StatusCode)
 		}
 
-		img, _, err = image.Decode(resp.Body)
+		data, err = readLimited(resp.Body, maxImageBytes)
 		if err != nil {
-			return ThemeInput{}, fmt.Errorf("failed to decode image from URL: %w", err)
+			return ThemeInput{}, fmt.Errorf("failed to read image from URL: %w", err)
 		}
 	} else {
 		file, err := os.Open(imagePathOrURL)
@@ -53,10 +59,23 @@ func ExtractThemeFromImageContext(ctx context.Context, imagePathOrURL string) (T
 		}
 		defer func() { _ = file.Close() }()
 
-		img, _, err = image.Decode(file)
+		data, err = readLimited(file, maxImageBytes)
 		if err != nil {
-			return ThemeInput{}, fmt.Errorf("failed to decode local image: %w", err)
+			return ThemeInput{}, fmt.Errorf("failed to read local image: %w", err)
 		}
+	}
+
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return ThemeInput{}, fmt.Errorf("failed to decode image metadata: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 || config.Width > maxImagePixels/config.Height {
+		return ThemeInput{}, fmt.Errorf("image dimensions %dx%d exceed the limit of %d pixels", config.Width, config.Height, maxImagePixels)
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return ThemeInput{}, fmt.Errorf("failed to decode image: %w", err)
 	}
 
 	palette, err := vibrant.NewPaletteFromImage(img)
@@ -83,4 +102,15 @@ func ExtractThemeFromImageContext(ctx context.Context, imagePathOrURL string) (T
 	}
 
 	return themeInput, nil
+}
+
+func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("image is larger than %d bytes", maxBytes)
+	}
+	return data, nil
 }

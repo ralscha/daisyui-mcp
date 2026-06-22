@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"image/png"
@@ -47,5 +48,12 @@ func TestExtractThemeFromImage(t *testing.T) {
 
 	if themeInput.Primary == "" && themeInput.Secondary == "" && themeInput.Accent == "" && themeInput.Neutral == "" {
 		t.Errorf("Expected at least one color to be extracted, got all empty")
+	}
+}
+
+func TestReadLimitedRejectsOversizedImage(t *testing.T) {
+	_, err := readLimited(bytes.NewReader([]byte("123456")), 5)
+	if err == nil {
+		t.Fatal("expected oversized image to be rejected")
 	}
 }

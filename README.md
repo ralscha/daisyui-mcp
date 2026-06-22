@@ -4,6 +4,8 @@
 
 - **Single Binary** – One self-contained executable, no Python/Node/runtime required
 - **Embedded Docs** – Component Markdown files are baked into the binary at build time — deploy just the `.exe`
+- **Theme Helpers** – Generate daisyUI 5 theme CSS from color values or from an image palette
+- **Offline by Default** – Runtime component and guide docs are served from embedded files unless explicitly overridden
 
 ## MCP Tools
 
@@ -19,15 +21,15 @@
 | `get_base_style_docs` | Get the daisyUI base/reset styles documentation |
 | `get_utilities_docs` | Get the daisyUI utility classes and CSS variables documentation |
 | `get_layout_typography_docs` | Get the daisyUI layout and typography documentation |
-| `generate_theme` | Generate a complete DaisyUI 5 custom theme CSS based on provided colors |
-| `generate_theme_from_image` | Extracts a color palette from a local or remote image and generates a complete DaisyUI 5 custom theme CSS |
+| `generate_theme` | Generate a complete daisyUI 5 custom theme CSS based on hex or OKLCH colors |
+| `generate_theme_from_image` | Extract a color palette from a local or remote image and generate a complete daisyUI 5 custom theme CSS |
 
 
 ## Installation
 
 ### Option A — Build from source
 
-Requires [Go](https://go.dev) and [Task](https://taskfile.dev).
+Requires [Go](https://go.dev) matching `go.mod` and [Task](https://taskfile.dev).
 
 ```bash
 git clone https://github.com/ralscha/daisyui-mcp.git
@@ -35,7 +37,7 @@ cd daisyui-mcp
 task build
 ```
 
-The resulting `bin/daisyui-server` (or `bin/daisyui-server.exe` on Windows) is the only file you need to deploy.
+`task build` refreshes the generated daisyUI documentation before compiling, so it needs network access. The resulting `bin/daisyui-server` (or `bin/daisyui-server.exe` on Windows) is the only file you need to deploy.
 
 #### Other task commands
 
@@ -71,6 +73,14 @@ Add the server to your AI assistant's MCP configuration. Because the binary is s
 |----------|-------------|
 | `DAISYUI_COMPONENTS_DIR` | Override the embedded component summaries with files from this directory |
 | `DAISYUI_DOCS_DIR` | Override the embedded detailed docs with files from this directory |
+
+Override directories should contain Markdown files named after component slugs, for example `button.md` or `card.md`.
+
+## Theme generation
+
+`generate_theme` accepts hex colors such as `#ff0000` or `ff0000`, plus OKLCH values such as `oklch(60% 0.2 30)`. It derives matching `*-content` colors and `base-200`/`base-300` values automatically.
+
+`generate_theme_from_image` accepts either `image_path` or `image_url`. Image reads are bounded to keep palette extraction predictable for local files and remote URLs.
 
 ## Disclaimer
 

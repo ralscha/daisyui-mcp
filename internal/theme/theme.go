@@ -11,15 +11,15 @@ import (
 )
 
 type ThemeInput struct {
-	Primary   string `json:"primary" jsonschema:"Primary color (hex, rgb, etc.). Required."`
-	Secondary string `json:"secondary,omitempty" jsonschema:"Secondary color. Optional."`
-	Accent    string `json:"accent,omitempty" jsonschema:"Accent color. Optional."`
-	Neutral   string `json:"neutral,omitempty" jsonschema:"Neutral color. Optional."`
-	Base100   string `json:"base_100,omitempty" jsonschema:"Base 100 color (background). Optional."`
-	Info      string `json:"info,omitempty" jsonschema:"Info color. Optional."`
-	Success   string `json:"success,omitempty" jsonschema:"Success color. Optional."`
-	Warning   string `json:"warning,omitempty" jsonschema:"Warning color. Optional."`
-	Error     string `json:"error,omitempty" jsonschema:"Error color. Optional."`
+	Primary   string `json:"primary" jsonschema:"Primary color (hex or OKLCH). Required."`
+	Secondary string `json:"secondary,omitempty" jsonschema:"Secondary color (hex or OKLCH). Optional."`
+	Accent    string `json:"accent,omitempty" jsonschema:"Accent color (hex or OKLCH). Optional."`
+	Neutral   string `json:"neutral,omitempty" jsonschema:"Neutral color (hex or OKLCH). Optional."`
+	Base100   string `json:"base_100,omitempty" jsonschema:"Base 100 background color (hex or OKLCH). Optional."`
+	Info      string `json:"info,omitempty" jsonschema:"Info color (hex or OKLCH). Optional."`
+	Success   string `json:"success,omitempty" jsonschema:"Success color (hex or OKLCH). Optional."`
+	Warning   string `json:"warning,omitempty" jsonschema:"Warning color (hex or OKLCH). Optional."`
+	Error     string `json:"error,omitempty" jsonschema:"Error color (hex or OKLCH). Optional."`
 
 	RadiusSelector string `json:"radius_selector,omitempty" jsonschema:"Radius selector. Optional."`
 	RadiusField    string `json:"radius_field,omitempty" jsonschema:"Radius field. Optional."`
@@ -80,6 +80,13 @@ func formatOklch(c colorful.Color) string {
 	hStr := strconv.FormatFloat(math.Round(h*1000)/1000, 'f', -1, 64)
 
 	return fmt.Sprintf("oklch(%s%% %s %s)", lStr, cStr, hStr)
+}
+
+func defaultString(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func GenerateThemeCSS(input ThemeInput) string {
@@ -144,38 +151,14 @@ func GenerateThemeCSS(input ThemeInput) string {
 	fmt.Fprintf(&sb, "  --color-error: %s;\n", formatOklch(errorColor))
 	fmt.Fprintf(&sb, "  --color-error-content: %s;\n", formatOklch(generateContentColor(errorColor)))
 
-	radiusSelector := input.RadiusSelector
-	if radiusSelector == "" {
-		radiusSelector = "0.25rem"
-	}
-	radiusField := input.RadiusField
-	if radiusField == "" {
-		radiusField = "0.25rem"
-	}
-	radiusBox := input.RadiusBox
-	if radiusBox == "" {
-		radiusBox = "0.5rem"
-	}
-	sizeSelector := input.SizeSelector
-	if sizeSelector == "" {
-		sizeSelector = "0.25rem"
-	}
-	sizeField := input.SizeField
-	if sizeField == "" {
-		sizeField = "0.25rem"
-	}
-	border := input.Border
-	if border == "" {
-		border = "1px"
-	}
-	depth := input.Depth
-	if depth == "" {
-		depth = "0"
-	}
-	noise := input.Noise
-	if noise == "" {
-		noise = "0"
-	}
+	radiusSelector := defaultString(input.RadiusSelector, "0.25rem")
+	radiusField := defaultString(input.RadiusField, "0.25rem")
+	radiusBox := defaultString(input.RadiusBox, "0.5rem")
+	sizeSelector := defaultString(input.SizeSelector, "0.25rem")
+	sizeField := defaultString(input.SizeField, "0.25rem")
+	border := defaultString(input.Border, "1px")
+	depth := defaultString(input.Depth, "0")
+	noise := defaultString(input.Noise, "0")
 
 	fmt.Fprintf(&sb, "  --radius-selector: %s;\n", radiusSelector)
 	fmt.Fprintf(&sb, "  --radius-field: %s;\n", radiusField)

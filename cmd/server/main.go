@@ -41,15 +41,15 @@ type GetComponentInput struct {
 type GetColorPaletteInput struct{}
 type GetGuideInput struct{}
 type GenerateThemeInput struct {
-	Primary   string `json:"primary" jsonschema:"Primary color in Hex format (e.g. '#ff0000'). Required."`
-	Secondary string `json:"secondary,omitempty" jsonschema:"Secondary color in Hex format. Optional."`
-	Accent    string `json:"accent,omitempty" jsonschema:"Accent color in Hex format. Optional."`
-	Neutral   string `json:"neutral,omitempty" jsonschema:"Neutral color in Hex format. Optional."`
-	Base100   string `json:"base_100,omitempty" jsonschema:"Base 100 color (background) in Hex format. Optional."`
-	Info      string `json:"info,omitempty" jsonschema:"Info color in Hex format. Optional."`
-	Success   string `json:"success,omitempty" jsonschema:"Success color in Hex format. Optional."`
-	Warning   string `json:"warning,omitempty" jsonschema:"Warning color in Hex format. Optional."`
-	Error     string `json:"error,omitempty" jsonschema:"Error color in Hex format. Optional."`
+	Primary   string `json:"primary" jsonschema:"Primary color in hex or OKLCH format (e.g. '#ff0000' or 'oklch(60% 0.2 30)'). Required."`
+	Secondary string `json:"secondary,omitempty" jsonschema:"Secondary color in hex or OKLCH format. Optional."`
+	Accent    string `json:"accent,omitempty" jsonschema:"Accent color in hex or OKLCH format. Optional."`
+	Neutral   string `json:"neutral,omitempty" jsonschema:"Neutral color in hex or OKLCH format. Optional."`
+	Base100   string `json:"base_100,omitempty" jsonschema:"Base 100 color (background) in hex or OKLCH format. Optional."`
+	Info      string `json:"info,omitempty" jsonschema:"Info color in hex or OKLCH format. Optional."`
+	Success   string `json:"success,omitempty" jsonschema:"Success color in hex or OKLCH format. Optional."`
+	Warning   string `json:"warning,omitempty" jsonschema:"Warning color in hex or OKLCH format. Optional."`
+	Error     string `json:"error,omitempty" jsonschema:"Error color in hex or OKLCH format. Optional."`
 
 	RadiusSelector string `json:"radius_selector,omitempty" jsonschema:"Radius selector. Optional."`
 	RadiusField    string `json:"radius_field,omitempty" jsonschema:"Radius field. Optional."`

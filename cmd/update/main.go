@@ -13,6 +13,11 @@ import (
 
 const llmsURL = "https://daisyui.com/llms.txt"
 
+const (
+	maxLLMSBytes = 25 << 20
+	maxDocBytes  = 5 << 20
+)
+
 func detailedDocURL(name string) string {
 	return "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/components/" + name + "/+page.md"
 }
@@ -82,7 +87,7 @@ func main() {
 		fatalf("unexpected HTTP status: %s", resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body, maxLLMSBytes)
 	if err != nil {
 		fatalf("error reading response body: %v", err)
 	}
@@ -233,7 +238,18 @@ func downloadFile(client *http.Client, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
-	return io.ReadAll(resp.Body)
+	return readLimited(resp.Body, maxDocBytes)
+}
+
+func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("response is larger than %d bytes", maxBytes)
+	}
+	return data, nil
 }
 
 func fatalf(format string, args ...any) {

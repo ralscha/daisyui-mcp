@@ -2,6 +2,7 @@ package components_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -183,15 +184,7 @@ func TestSuggestions_NoMatch(t *testing.T) {
 }
 
 func containsStr(s, sub string) bool {
-	return len(s) > 0 && (s == sub || len(sub) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-			return false
-		}())
+	return strings.Contains(s, sub)
 }
 
 func assertContains(t *testing.T, slice []string, want string) {
