@@ -31,25 +31,33 @@ type ThemeInput struct {
 	Noise          string `json:"noise,omitempty" jsonschema:"Noise. Optional."`
 }
 
-var oklchRegex = regexp.MustCompile(`(?i)oklch\(\s*([\d.]+)%?\s+([\d.]+)\s+([\d.]+)\s*\)`)
+var oklchRegex = regexp.MustCompile(`(?i)^oklch\(\s*([\d.]+)(%)?\s+([\d.]+)\s+([\d.]+)\s*\)$`)
 
 func parseColor(s string, defaultColor colorful.Color) colorful.Color {
+	c, _ := parseColorWithStatus(s, defaultColor)
+	return c
+}
+
+func parseColorWithStatus(s string, defaultColor colorful.Color) (colorful.Color, bool) {
 	if s == "" {
-		return defaultColor
+		return defaultColor, true
 	}
 	s = strings.TrimSpace(s)
 	s = strings.TrimSuffix(s, ";")
 
-	if matches := oklchRegex.FindStringSubmatch(s); len(matches) == 4 {
-		l, _ := strconv.ParseFloat(matches[1], 64)
-		if strings.Contains(matches[0], "%") {
+	if matches := oklchRegex.FindStringSubmatch(s); len(matches) == 5 {
+		l, lErr := strconv.ParseFloat(matches[1], 64)
+		if matches[2] == "%" {
 			l = l / 100.0
 		} else if l > 1.0 {
 			l = l / 100.0
 		}
-		c, _ := strconv.ParseFloat(matches[2], 64)
-		h, _ := strconv.ParseFloat(matches[3], 64)
-		return colorful.OkLch(l, c, h)
+		c, cErr := strconv.ParseFloat(matches[3], 64)
+		h, hErr := strconv.ParseFloat(matches[4], 64)
+		if lErr != nil || cErr != nil || hErr != nil || l < 0 || l > 1 || c < 0 || h < 0 || h > 360 {
+			return defaultColor, false
+		}
+		return colorful.OkLch(l, c, h), true
 	}
 
 	if !strings.HasPrefix(s, "#") && !strings.HasPrefix(s, "rgb") && !strings.HasPrefix(s, "hsl") && !strings.HasPrefix(s, "oklch") {
@@ -57,9 +65,9 @@ func parseColor(s string, defaultColor colorful.Color) colorful.Color {
 	}
 	c, err := colorful.Hex(s)
 	if err == nil {
-		return c
+		return c, true
 	}
-	return defaultColor
+	return defaultColor, false
 }
 
 func generateContentColor(c colorful.Color) colorful.Color {
@@ -89,16 +97,57 @@ func defaultString(value, fallback string) string {
 	return value
 }
 
-func GenerateThemeCSS(input ThemeInput) string {
-	primary := parseColor(input.Primary, colorful.OkLch(0.55, 0.3, 240))
-	secondary := parseColor(input.Secondary, colorful.OkLch(0.70, 0.25, 200))
-	accent := parseColor(input.Accent, colorful.OkLch(0.65, 0.25, 160))
-	neutral := parseColor(input.Neutral, colorful.OkLch(0.50, 0.05, 240))
-	base100 := parseColor(input.Base100, colorful.OkLch(0.98, 0.02, 240))
-	info := parseColor(input.Info, colorful.OkLch(0.70, 0.2, 220))
-	success := parseColor(input.Success, colorful.OkLch(0.65, 0.25, 140))
-	warning := parseColor(input.Warning, colorful.OkLch(0.80, 0.25, 80))
-	errorColor := parseColor(input.Error, colorful.OkLch(0.65, 0.3, 30))
+type GeneratedColor struct {
+	Name          string  `json:"name"`
+	Value         string  `json:"value"`
+	ContentValue  string  `json:"content_value"`
+	ContrastRatio float64 `json:"contrast_ratio"`
+}
+
+type GeneratedTheme struct {
+	CSS      string           `json:"css"`
+	Colors   []GeneratedColor `json:"colors"`
+	Warnings []string         `json:"warnings"`
+}
+
+func GenerateTheme(input ThemeInput) GeneratedTheme {
+	type colorSpec struct {
+		name     string
+		input    string
+		fallback colorful.Color
+	}
+
+	specs := []colorSpec{
+		{"primary", input.Primary, colorful.OkLch(0.55, 0.3, 240)},
+		{"secondary", input.Secondary, colorful.OkLch(0.70, 0.25, 200)},
+		{"accent", input.Accent, colorful.OkLch(0.65, 0.25, 160)},
+		{"neutral", input.Neutral, colorful.OkLch(0.50, 0.05, 240)},
+		{"base-100", input.Base100, colorful.OkLch(0.98, 0.02, 240)},
+		{"info", input.Info, colorful.OkLch(0.70, 0.2, 220)},
+		{"success", input.Success, colorful.OkLch(0.65, 0.25, 140)},
+		{"warning", input.Warning, colorful.OkLch(0.80, 0.25, 80)},
+		{"error", input.Error, colorful.OkLch(0.65, 0.3, 30)},
+	}
+
+	parsed := make(map[string]colorful.Color, len(specs))
+	warnings := make([]string, 0)
+	for _, spec := range specs {
+		color, valid := parseColorWithStatus(spec.input, spec.fallback)
+		parsed[spec.name] = color
+		if spec.input != "" && !valid {
+			warnings = append(warnings, fmt.Sprintf("Invalid %s color %q; the default value was used.", spec.name, spec.input))
+		}
+	}
+
+	primary := parsed["primary"]
+	secondary := parsed["secondary"]
+	accent := parsed["accent"]
+	neutral := parsed["neutral"]
+	base100 := parsed["base-100"]
+	info := parsed["info"]
+	success := parsed["success"]
+	warning := parsed["warning"]
+	errorColor := parsed["error"]
 
 	b1L, b1C, b1H := base100.OkLch()
 
@@ -125,31 +174,41 @@ func GenerateThemeCSS(input ThemeInput) string {
 	fmt.Fprintf(&sb, "  --color-base-100: %s;\n", formatOklch(base100))
 	fmt.Fprintf(&sb, "  --color-base-200: %s;\n", formatOklch(base200))
 	fmt.Fprintf(&sb, "  --color-base-300: %s;\n", formatOklch(base300))
-	fmt.Fprintf(&sb, "  --color-base-content: %s;\n", formatOklch(generateContentColor(base100)))
+	baseContent := generateContentColor(base100)
+	primaryContent := generateContentColor(primary)
+	secondaryContent := generateContentColor(secondary)
+	accentContent := generateContentColor(accent)
+	neutralContent := generateContentColor(neutral)
+	infoContent := generateContentColor(info)
+	successContent := generateContentColor(success)
+	warningContent := generateContentColor(warning)
+	errorContent := generateContentColor(errorColor)
+
+	fmt.Fprintf(&sb, "  --color-base-content: %s;\n", formatOklch(baseContent))
 
 	fmt.Fprintf(&sb, "  --color-primary: %s;\n", formatOklch(primary))
-	fmt.Fprintf(&sb, "  --color-primary-content: %s;\n", formatOklch(generateContentColor(primary)))
+	fmt.Fprintf(&sb, "  --color-primary-content: %s;\n", formatOklch(primaryContent))
 
 	fmt.Fprintf(&sb, "  --color-secondary: %s;\n", formatOklch(secondary))
-	fmt.Fprintf(&sb, "  --color-secondary-content: %s;\n", formatOklch(generateContentColor(secondary)))
+	fmt.Fprintf(&sb, "  --color-secondary-content: %s;\n", formatOklch(secondaryContent))
 
 	fmt.Fprintf(&sb, "  --color-accent: %s;\n", formatOklch(accent))
-	fmt.Fprintf(&sb, "  --color-accent-content: %s;\n", formatOklch(generateContentColor(accent)))
+	fmt.Fprintf(&sb, "  --color-accent-content: %s;\n", formatOklch(accentContent))
 
 	fmt.Fprintf(&sb, "  --color-neutral: %s;\n", formatOklch(neutral))
-	fmt.Fprintf(&sb, "  --color-neutral-content: %s;\n", formatOklch(generateContentColor(neutral)))
+	fmt.Fprintf(&sb, "  --color-neutral-content: %s;\n", formatOklch(neutralContent))
 
 	fmt.Fprintf(&sb, "  --color-info: %s;\n", formatOklch(info))
-	fmt.Fprintf(&sb, "  --color-info-content: %s;\n", formatOklch(generateContentColor(info)))
+	fmt.Fprintf(&sb, "  --color-info-content: %s;\n", formatOklch(infoContent))
 
 	fmt.Fprintf(&sb, "  --color-success: %s;\n", formatOklch(success))
-	fmt.Fprintf(&sb, "  --color-success-content: %s;\n", formatOklch(generateContentColor(success)))
+	fmt.Fprintf(&sb, "  --color-success-content: %s;\n", formatOklch(successContent))
 
 	fmt.Fprintf(&sb, "  --color-warning: %s;\n", formatOklch(warning))
-	fmt.Fprintf(&sb, "  --color-warning-content: %s;\n", formatOklch(generateContentColor(warning)))
+	fmt.Fprintf(&sb, "  --color-warning-content: %s;\n", formatOklch(warningContent))
 
 	fmt.Fprintf(&sb, "  --color-error: %s;\n", formatOklch(errorColor))
-	fmt.Fprintf(&sb, "  --color-error-content: %s;\n", formatOklch(generateContentColor(errorColor)))
+	fmt.Fprintf(&sb, "  --color-error-content: %s;\n", formatOklch(errorContent))
 
 	radiusSelector := defaultString(input.RadiusSelector, "0.25rem")
 	radiusField := defaultString(input.RadiusField, "0.25rem")
@@ -170,5 +229,49 @@ func GenerateThemeCSS(input ThemeInput) string {
 	fmt.Fprintf(&sb, "  --noise: %s;\n", noise)
 	sb.WriteString("}\n")
 
-	return sb.String()
+	pairs := []struct {
+		name    string
+		color   colorful.Color
+		content colorful.Color
+	}{
+		{"base-100", base100, baseContent},
+		{"primary", primary, primaryContent},
+		{"secondary", secondary, secondaryContent},
+		{"accent", accent, accentContent},
+		{"neutral", neutral, neutralContent},
+		{"info", info, infoContent},
+		{"success", success, successContent},
+		{"warning", warning, warningContent},
+		{"error", errorColor, errorContent},
+	}
+	colors := make([]GeneratedColor, 0, len(pairs))
+	for _, pair := range pairs {
+		ratio := contrastRatio(pair.color, pair.content)
+		colors = append(colors, GeneratedColor{
+			Name:          pair.name,
+			Value:         formatOklch(pair.color),
+			ContentValue:  formatOklch(pair.content),
+			ContrastRatio: math.Round(ratio*100) / 100,
+		})
+		if ratio < 4.5 {
+			warnings = append(warnings, fmt.Sprintf("%s and %s-content have a contrast ratio of %.2f:1, below the WCAG AA text target of 4.5:1.", pair.name, pair.name, ratio))
+		}
+	}
+
+	return GeneratedTheme{CSS: sb.String(), Colors: colors, Warnings: warnings}
+}
+
+func GenerateThemeCSS(input ThemeInput) string {
+	return GenerateTheme(input).CSS
+}
+
+func contrastRatio(a, b colorful.Color) float64 {
+	ar, ag, ab := a.Clamped().LinearRgb()
+	br, bg, bb := b.Clamped().LinearRgb()
+	aLuminance := 0.2126*ar + 0.7152*ag + 0.0722*ab
+	bLuminance := 0.2126*br + 0.7152*bg + 0.0722*bb
+	if aLuminance < bLuminance {
+		aLuminance, bLuminance = bLuminance, aLuminance
+	}
+	return (aLuminance + 0.05) / (bLuminance + 0.05)
 }

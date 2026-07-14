@@ -39,3 +39,27 @@ func TestGenerateThemeCSSUsesDefaultShapeValues(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateThemeReturnsColorsContrastAndWarnings(t *testing.T) {
+	result := GenerateTheme(ThemeInput{Primary: "not-a-color"})
+	if result.CSS == "" {
+		t.Fatal("GenerateTheme() returned empty CSS")
+	}
+	if len(result.Colors) != 9 {
+		t.Fatalf("GenerateTheme() returned %d colors, want 9", len(result.Colors))
+	}
+	for _, color := range result.Colors {
+		if color.Value == "" || color.ContentValue == "" || color.ContrastRatio <= 0 {
+			t.Fatalf("incomplete generated color: %+v", color)
+		}
+	}
+	foundInvalidWarning := false
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "Invalid primary color") {
+			foundInvalidWarning = true
+		}
+	}
+	if !foundInvalidWarning {
+		t.Fatalf("warnings = %v, want an invalid primary warning", result.Warnings)
+	}
+}

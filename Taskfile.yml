@@ -33,6 +33,7 @@ tasks:
       - 'docs/**/*.md'
       - 'components/**/*.md'
       - 'guide/**/*.md'
+      - 'recipes/**/*.md'
     generates:
       - '{{.SERVER_BIN}}'
 

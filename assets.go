@@ -28,3 +28,6 @@ var GuideUtilities []byte
 
 //go:embed guide/layout-and-typography.md
 var GuideLayoutTypography []byte
+
+//go:embed recipes
+var RecipesFS embed.FS

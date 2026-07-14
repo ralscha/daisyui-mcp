@@ -13,7 +13,7 @@
 |------|-------------|
 | `list_components` | List all available DaisyUI components with names and brief descriptions |
 | `get_short_doc` | Get a concise summary for a component: CSS classes, HTML syntax, and usage rules |
-| `get_detailed_doc` | Get the full documentation page for a component, including all variants and advanced usage |
+| `get_detailed_doc` | Get paged detailed documentation, optionally selecting an exact Markdown section |
 | `get_color_palette` | List all daisyUI semantic colors, modifier class patterns, and usage rules |
 | `get_customize_docs` | Get the daisyUI customization guide (CSS, Tailwind, and daisyUI conventions) |
 | `get_config_docs` | Get the daisyUI configuration reference (themes, logs, prefix, and more) |
@@ -23,6 +23,37 @@
 | `get_layout_typography_docs` | Get the daisyUI layout and typography documentation |
 | `generate_theme` | Generate a complete daisyUI 5 custom theme CSS based on hex or OKLCH colors |
 | `generate_theme_from_image` | Extract a color palette from a local or remote image and generate a complete daisyUI 5 custom theme CSS |
+| `list_recipes` | List curated recipes for common daisyUI application compositions |
+| `get_recipe` | Get an accessible composition recipe with HTML and implementation notes |
+
+Tool responses retain human-readable text and also include structured content. Component listings are returned as arrays; documentation includes page metadata; and generated themes include CSS, semantic color pairs, contrast ratios, and warnings.
+
+### Detailed documentation pages
+
+`get_detailed_doc` returns at most 12,000 characters by default so a large component page does not unexpectedly consume the client's context window. Pass `page` to continue, `page_size` to request up to 24,000 characters, or `section` to select an exact Markdown heading. The structured response reports `available_sections`, `total_pages`, and `has_more`.
+
+For example:
+
+```json
+{
+  "name": "button",
+  "section": "Button sizes",
+  "page": 1,
+  "page_size": 8000
+}
+```
+
+## MCP Resources
+
+Clients that support MCP resources can browse or read the complete embedded documentation directly. Tools remain available for compatibility and context-efficient paging.
+
+| URI template | Content |
+|-------------|---------|
+| `daisyui://components/{name}` | Full component documentation |
+| `daisyui://guides/{name}` | Colors, configuration, themes, utilities, and customization guides |
+| `daisyui://recipes/{name}` | Curated composition recipes |
+
+The 20 included recipes cover authentication, application navigation, dialogs, dashboards, accessible forms, pricing, landing pages, FAQs, data tables, checkout, uploads, notifications, and common empty or consent states. Every recipe is independently authored for this project, targets daisyUI 5, and records its official documentation references in a provenance section.
 
 
 ## Installation
@@ -81,6 +112,8 @@ Override directories should contain Markdown files named after component slugs, 
 `generate_theme` accepts hex colors such as `#ff0000` or `ff0000`, plus OKLCH values such as `oklch(60% 0.2 30)`. It derives matching `*-content` colors and `base-200`/`base-300` values automatically.
 
 `generate_theme_from_image` accepts either `image_path` or `image_url`. Image reads are bounded to keep palette extraction predictable for local files and remote URLs.
+
+Theme tools return the generated CSS as text and as structured data. Structured results include each semantic color and its `*-content` partner, their contrast ratio, extracted image colors when applicable, and warnings such as low contrast or fallback colors.
 
 ## Disclaimer
 
