@@ -5,7 +5,7 @@ before:
     - go mod tidy
     - go run ./cmd/update
 builds:
-  - main: ./cmd/server/main.go
+  - main: ./cmd/server
     binary: daisyui-server
     env:
       - CGO_ENABLED=0
