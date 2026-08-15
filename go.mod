@@ -1,12 +1,12 @@
 module daisyui-mcp
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/generaltso/vibrant v0.0.0-20230605224344-08d3d20033fc
 	github.com/lucasb-eyer/go-colorful v1.4.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	golang.org/x/image v0.44.0
+	golang.org/x/image v0.45.0
 )
 
 require (
