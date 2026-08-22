@@ -1,6 +1,6 @@
 module daisyui-mcp
 
-go 1.26.6
+go 1.27.0
 
 require (
 	github.com/generaltso/vibrant v0.0.0-20230605224344-08d3d20033fc
