@@ -26,6 +26,32 @@ func guideDocuments() map[string][]byte {
 	}
 }
 
+func registerGuideTools(server *mcp.Server) {
+	guides := []struct {
+		toolName     string
+		documentName string
+		description  string
+		content      []byte
+	}{
+		{"get_customize_docs", "customize", "Get the daisyUI guide for customizing components with CSS, Tailwind, and daisyUI conventions.", daisyuimcp.GuideCustomize},
+		{"get_config_docs", "config", "Get the daisyUI configuration reference, including themes, logs, prefix, and other plugin options.", daisyuimcp.GuideConfig},
+		{"get_themes_docs", "themes", "Get the daisyUI themes guide for applying, customizing, and creating themes.", daisyuimcp.GuideThemes},
+		{"get_base_style_docs", "base", "Get the daisyUI base/reset styles guide and learn how to control those styles.", daisyuimcp.GuideBase},
+		{"get_utilities_docs", "utilities", "Get the daisyUI utility classes and CSS custom-properties guide.", daisyuimcp.GuideUtilities},
+		{"get_layout_typography_docs", "layout-and-typography", "Get the daisyUI layout and typography guide.", daisyuimcp.GuideLayoutTypography},
+	}
+
+	for _, guide := range guides {
+		mcp.AddTool(
+			server,
+			&mcp.Tool{Name: guide.toolName, Description: guide.description},
+			func(_ context.Context, _ *mcp.CallToolRequest, _ GetGuideInput) (*mcp.CallToolResult, DocumentOutput, error) {
+				return guideToolResult(guide.documentName, guide.content)
+			},
+		)
+	}
+}
+
 func registerDocumentationResources(
 	server *mcp.Server,
 	componentIndex map[string]string,

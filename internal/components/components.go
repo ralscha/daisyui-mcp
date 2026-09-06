@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"io/fs"
+	"path"
 	"sort"
 	"strings"
 )
@@ -41,27 +42,31 @@ func LoadIndexFS(fsys fs.FS, dir string) map[string]string {
 		return index
 	}
 
-	for _, path := range entries {
-		data, err := fs.ReadFile(fsys, path)
+	for _, filePath := range entries {
+		data, err := fs.ReadFile(fsys, filePath)
 		if err != nil {
 			continue
 		}
 
 		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-		name := ""
+		name := strings.ToLower(strings.TrimSuffix(path.Base(filePath), ".md"))
 		description := ""
+		foundHeading := false
 
 		for i, line := range lines {
 			if strings.HasPrefix(line, "### ") {
-				name = strings.ToLower(strings.TrimSpace(line[4:]))
-				if i+1 < len(lines) {
-					description = strings.TrimSpace(lines[i+1])
+				foundHeading = true
+				for _, candidate := range lines[i+1:] {
+					description = strings.TrimSpace(candidate)
+					if description != "" {
+						break
+					}
 				}
 				break
 			}
 		}
 
-		if name != "" {
+		if foundHeading && name != "" {
 			index[name] = description
 		}
 	}
@@ -112,6 +117,64 @@ func Suggestions(index map[string]string, name string) []string {
 		out[i] = c.key
 	}
 	return out
+}
+
+// Search returns component names ordered by relevance to the query. Every query
+// term must match either the component name or its short description.
+func Search(index map[string]string, query string, limit int) []string {
+	terms := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	if len(terms) == 0 || limit <= 0 {
+		return []string{}
+	}
+
+	type match struct {
+		name  string
+		score int
+	}
+	matches := make([]match, 0)
+	for name, description := range index {
+		searchableDescription := strings.ToLower(description)
+		score := 0
+		matched := true
+		for _, term := range terms {
+			switch {
+			case name == term:
+				score += 100
+			case strings.HasPrefix(name, term):
+				score += 60
+			case strings.Contains(name, term):
+				score += 40
+			case strings.Contains(searchableDescription, term):
+				score += 20
+			default:
+				fuzzyScore := suggestionScore(name, term)
+				if fuzzyScore == 0 {
+					matched = false
+					break
+				}
+				score += fuzzyScore / 2
+			}
+		}
+		if matched {
+			matches = append(matches, match{name: name, score: score})
+		}
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		return matches[i].name < matches[j].name
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+
+	result := make([]string, len(matches))
+	for i, match := range matches {
+		result[i] = match.name
+	}
+	return result
 }
 
 func suggestionScore(key, name string) int {

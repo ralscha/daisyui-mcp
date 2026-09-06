@@ -110,6 +110,28 @@ func TestDocumentationResourcesAndTemplates(t *testing.T) {
 	}
 }
 
+func TestGuideToolsReturnTheirOwnDocuments(t *testing.T) {
+	client := testServer(t)
+	guides := map[string]string{
+		"get_customize_docs":         "customize",
+		"get_config_docs":            "config",
+		"get_themes_docs":            "themes",
+		"get_base_style_docs":        "base",
+		"get_utilities_docs":         "utilities",
+		"get_layout_typography_docs": "layout-and-typography",
+	}
+	for toolName, documentName := range guides {
+		result, err := client.CallTool(t.Context(), &mcp.CallToolParams{Name: toolName, Arguments: map[string]any{}})
+		if err != nil {
+			t.Fatalf("CallTool(%s) error = %v", toolName, err)
+		}
+		structured, ok := result.StructuredContent.(map[string]any)
+		if !ok || structured["name"] != documentName || structured["documentation"] == "" {
+			t.Errorf("%s returned unexpected document: %#v", toolName, result.StructuredContent)
+		}
+	}
+}
+
 func TestListComponentsReturnsStructuredArray(t *testing.T) {
 	client := testServer(t)
 	result, err := client.CallTool(t.Context(), &mcp.CallToolParams{Name: "list_components", Arguments: map[string]any{}})
@@ -126,12 +148,47 @@ func TestListComponentsReturnsStructuredArray(t *testing.T) {
 	}
 }
 
+func TestSearchComponentsReturnsRankedStructuredResults(t *testing.T) {
+	client := testServer(t)
+	result, err := client.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "search_components",
+		Arguments: map[string]any{"query": "clickable"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(search_components) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("search_components returned a tool error: %#v", result.Content)
+	}
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok || structured["count"] != float64(1) {
+		t.Fatalf("unexpected search structured content: %#v", result.StructuredContent)
+	}
+	components, ok := structured["components"].([]any)
+	if !ok || len(components) != 1 {
+		t.Fatalf("unexpected search components: %#v", structured["components"])
+	}
+}
+
+func TestSearchComponentsRejectsInvalidInput(t *testing.T) {
+	client := testServer(t)
+	for _, arguments := range []map[string]any{{"query": " "}, {"query": "button", "limit": 51}} {
+		result, err := client.CallTool(t.Context(), &mcp.CallToolParams{Name: "search_components", Arguments: arguments})
+		if err != nil {
+			t.Fatalf("CallTool(search_components) error = %v", err)
+		}
+		if !result.IsError {
+			t.Fatalf("search_components accepted invalid input %#v", arguments)
+		}
+	}
+}
+
 func TestThemeAndRecipeToolsReturnStructuredContent(t *testing.T) {
 	client := testServer(t)
 
 	themeResult, err := client.CallTool(t.Context(), &mcp.CallToolParams{
 		Name:      "generate_theme",
-		Arguments: map[string]any{"primary": "#2563eb"},
+		Arguments: map[string]any{"name": "brand", "primary": "#2563eb", "default": true, "prefers_dark": true},
 	})
 	if err != nil {
 		t.Fatalf("CallTool(generate_theme) error = %v", err)
@@ -147,6 +204,13 @@ func TestThemeAndRecipeToolsReturnStructuredContent(t *testing.T) {
 	if _, ok := themeOutput["warnings"].([]any); !ok {
 		t.Fatalf("theme warnings are not a structured array: %#v", themeOutput["warnings"])
 	}
+	if themeOutput["name"] != "brand" || themeOutput["default"] != true || themeOutput["prefers_dark"] != true {
+		t.Fatalf("theme metadata is missing from structured content: %#v", themeOutput)
+	}
+	css, _ := themeOutput["css"].(string)
+	if !strings.Contains(css, `name: "brand";`) || !strings.Contains(css, "default: true;") || !strings.Contains(css, "prefersdark: true;") {
+		t.Fatalf("generated theme is missing requested metadata: %s", css)
+	}
 
 	recipeResult, err := client.CallTool(t.Context(), &mcp.CallToolParams{Name: "list_recipes", Arguments: map[string]any{}})
 	if err != nil {
@@ -155,6 +219,22 @@ func TestThemeAndRecipeToolsReturnStructuredContent(t *testing.T) {
 	recipeOutput, ok := recipeResult.StructuredContent.(map[string]any)
 	if !ok || recipeOutput["count"] != float64(20) {
 		t.Fatalf("unexpected recipe structured content: %#v", recipeResult.StructuredContent)
+	}
+}
+
+func TestImageThemeToolRequiresExactlyOneSource(t *testing.T) {
+	client := testServer(t)
+	for _, arguments := range []map[string]any{
+		{},
+		{"image_path": "local.png", "image_url": "https://example.com/image.png"},
+	} {
+		result, err := client.CallTool(t.Context(), &mcp.CallToolParams{Name: "generate_theme_from_image", Arguments: arguments})
+		if err != nil {
+			t.Fatalf("CallTool(generate_theme_from_image) error = %v", err)
+		}
+		if !result.IsError {
+			t.Fatalf("generate_theme_from_image accepted sources %#v", arguments)
+		}
 	}
 }
 

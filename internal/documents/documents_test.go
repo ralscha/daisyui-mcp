@@ -1,6 +1,7 @@
 package documents
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -96,5 +97,33 @@ func TestMarkdownHeadingsNormalizesDaisyUIDisplayMarker(t *testing.T) {
 	}
 	if result.Section != "Button sizes" {
 		t.Fatalf("section = %q, want normalized daisyUI heading", result.Section)
+	}
+}
+
+func TestMarkdownHeadingsRejectsIndentedCodeAndPreservesHashes(t *testing.T) {
+	content := "    ## Not a heading\n\n## C# reference\n\n### Real heading ###\n"
+	result, err := Paginate(content, "C# reference", 1, 1_000)
+	if err != nil {
+		t.Fatalf("Paginate() error = %v", err)
+	}
+	if !strings.EqualFold(result.Section, "C# reference") {
+		t.Fatalf("section = %q, want C# reference", result.Section)
+	}
+	if strings.Contains(strings.Join(result.AvailableSections, "|"), "Not a heading") {
+		t.Fatalf("indented code was treated as a heading: %v", result.AvailableSections)
+	}
+	if !strings.Contains(strings.Join(result.AvailableSections, "|"), "Real heading") {
+		t.Fatalf("closing heading sequence was not normalized: %v", result.AvailableSections)
+	}
+}
+
+func TestMarkdownHeadingsTracksFenceCharacterAndLength(t *testing.T) {
+	content := "# Real\n\n````md\n```\n## Still fenced\n````\n\n~~~text\n```\n## Also fenced\n~~~\n\n## Visible\n"
+	result, err := Paginate(content, "", 1, 1_000)
+	if err != nil {
+		t.Fatalf("Paginate() error = %v", err)
+	}
+	if !slices.Equal(result.AvailableSections, []string{"Real", "Visible"}) {
+		t.Fatalf("sections = %v, want [Real Visible]", result.AvailableSections)
 	}
 }

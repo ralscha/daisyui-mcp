@@ -12,6 +12,7 @@
 | Tool | Description |
 |------|-------------|
 | `list_components` | List all available DaisyUI components with names and brief descriptions |
+| `search_components` | Search component names and descriptions, ordered by relevance |
 | `get_short_doc` | Get a concise summary for a component: CSS classes, HTML syntax, and usage rules |
 | `get_detailed_doc` | Get paged detailed documentation, optionally selecting an exact Markdown section |
 | `get_color_palette` | List all daisyUI semantic colors, modifier class patterns, and usage rules |
@@ -109,11 +110,11 @@ Override directories should contain Markdown files named after component slugs, 
 
 ## Theme generation
 
-`generate_theme` accepts hex colors such as `#ff0000` or `ff0000`, plus OKLCH values such as `oklch(60% 0.2 30)`. It derives matching `*-content` colors and `base-200`/`base-300` values automatically.
+`generate_theme` accepts hex colors such as `#ff0000` or `ff0000`, plus OKLCH values such as `oklch(60% 0.2 30)`. It derives matching WCAG AA `*-content` colors and `base-200`/`base-300` values automatically. Both theme tools accept `name`, `default`, and `prefers_dark` to configure the generated daisyUI theme declaration.
 
-`generate_theme_from_image` accepts either `image_path` or `image_url`. Image reads are bounded to keep palette extraction predictable for local files and remote URLs.
+`generate_theme_from_image` accepts exactly one of `image_path` or `image_url`. Image reads are bounded to keep palette extraction predictable. Remote URLs must use HTTP(S), may not contain credentials, and must resolve to public network addresses; redirects receive the same checks.
 
-Theme tools return the generated CSS as text and as structured data. Structured results include each semantic color and its `*-content` partner, their contrast ratio, extracted image colors when applicable, and warnings such as low contrast or fallback colors.
+Theme tools return the generated CSS as text and as structured data. Structured results include theme metadata, each semantic color and its `*-content` partner, their contrast ratio, extracted image colors when applicable, and validation warnings.
 
 ## Disclaimer
 

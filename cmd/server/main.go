@@ -36,6 +36,10 @@ func docsSource() (fs.FS, string) {
 
 // Input types
 type ListComponentsInput struct{}
+type SearchComponentsInput struct {
+	Query string `json:"query" jsonschema:"Words to match against component names and descriptions. Required."`
+	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of results. Defaults to 10 and cannot exceed 50."`
+}
 type GetComponentInput struct {
 	Name string `json:"name" jsonschema:"The name of the DaisyUI component (e.g. 'button', 'card', 'badge'). Case-insensitive."`
 }
@@ -48,6 +52,10 @@ type GetDetailedDocInput struct {
 type GetColorPaletteInput struct{}
 type GetGuideInput struct{}
 type GenerateThemeInput struct {
+	Name        string `json:"name,omitempty" jsonschema:"Theme name. Defaults to 'mytheme'."`
+	Default     bool   `json:"default,omitempty" jsonschema:"Whether this should be the default daisyUI theme."`
+	PrefersDark bool   `json:"prefers_dark,omitempty" jsonschema:"Whether this theme should be selected for a dark system preference."`
+
 	Primary   string `json:"primary" jsonschema:"Primary color in hex or OKLCH format (e.g. '#ff0000' or 'oklch(60% 0.2 30)'). Required."`
 	Secondary string `json:"secondary,omitempty" jsonschema:"Secondary color in hex or OKLCH format. Optional."`
 	Accent    string `json:"accent,omitempty" jsonschema:"Accent color in hex or OKLCH format. Optional."`
@@ -68,9 +76,14 @@ type GenerateThemeInput struct {
 	Noise          string `json:"noise,omitempty" jsonschema:"Noise. Optional."`
 }
 type GenerateThemeFromImageInput struct {
-	ImagePath string `json:"image_path,omitempty" jsonschema:"Local file path to the image. Either image_path or image_url must be provided."`
-	ImageURL  string `json:"image_url,omitempty" jsonschema:"URL to the image. Either image_path or image_url must be provided."`
+	ImagePath   string `json:"image_path,omitempty" jsonschema:"Local file path to the image. Either image_path or image_url must be provided."`
+	ImageURL    string `json:"image_url,omitempty" jsonschema:"URL to the image. Either image_path or image_url must be provided."`
+	Name        string `json:"name,omitempty" jsonschema:"Theme name. Defaults to 'mytheme'."`
+	Default     bool   `json:"default,omitempty" jsonschema:"Whether this should be the default daisyUI theme."`
+	PrefersDark bool   `json:"prefers_dark,omitempty" jsonschema:"Whether this theme should be selected for a dark system preference."`
 }
+
+var serverVersion = "dev"
 
 func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Server {
 	index := components.LoadIndexFS(fsys, fsDir)
@@ -80,7 +93,7 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "DaisyUI MCP Server",
-			Version: "1.0.0",
+			Version: serverVersion,
 		},
 		nil,
 	)
@@ -106,6 +119,39 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 					&mcp.TextContent{Text: text},
 				},
 			}, ComponentListOutput{Components: summaries, Count: len(summaries)}, nil
+		},
+	)
+
+	mcp.AddTool(
+		server,
+		&mcp.Tool{
+			Name:        "search_components",
+			Description: "Search daisyUI component names and short descriptions. Results are ordered by relevance.",
+		},
+		func(
+			_ context.Context,
+			_ *mcp.CallToolRequest,
+			input SearchComponentsInput,
+		) (*mcp.CallToolResult, ComponentListOutput, error) {
+			query := strings.TrimSpace(input.Query)
+			limit := input.Limit
+			if query == "" {
+				return componentListToolError("Search query must not be empty.")
+			}
+			if limit < 0 || limit > 50 {
+				return componentListToolError("Search limit must be between 1 and 50.")
+			}
+			if limit == 0 {
+				limit = 10
+			}
+
+			names := components.Search(index, query, limit)
+			summaries := componentSummariesForNames(index, names, "components")
+			text := formatComponentSearch(query, summaries)
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, ComponentListOutput{
+				Components: summaries,
+				Count:      len(summaries),
+			}, nil
 		},
 	)
 
@@ -255,101 +301,7 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 		},
 	)
 
-	mcp.AddTool(
-		server,
-		&mcp.Tool{
-			Name: "get_customize_docs",
-			Description: "Get the DaisyUI documentation for customizing components. " +
-				"Explains how to customize daisyUI component styles using CSS, Tailwind, and daisyUI conventions.",
-		},
-		func(
-			_ context.Context,
-			_ *mcp.CallToolRequest,
-			_ GetGuideInput,
-		) (*mcp.CallToolResult, DocumentOutput, error) {
-			return guideToolResult("customize", daisyuimcp.GuideCustomize)
-		},
-	)
-
-	mcp.AddTool(
-		server,
-		&mcp.Tool{
-			Name: "get_config_docs",
-			Description: "Get the DaisyUI configuration reference. " +
-				"Covers all daisyUI plugin config options such as themes, logs, prefix, and more.",
-		},
-		func(
-			_ context.Context,
-			_ *mcp.CallToolRequest,
-			_ GetGuideInput,
-		) (*mcp.CallToolResult, DocumentOutput, error) {
-			return guideToolResult("config", daisyuimcp.GuideConfig)
-		},
-	)
-
-	mcp.AddTool(
-		server,
-		&mcp.Tool{
-			Name: "get_themes_docs",
-			Description: "Get the DaisyUI themes documentation. " +
-				"Lists all built-in themes, explains how to apply, customize, and create new themes.",
-		},
-		func(
-			_ context.Context,
-			_ *mcp.CallToolRequest,
-			_ GetGuideInput,
-		) (*mcp.CallToolResult, DocumentOutput, error) {
-			return guideToolResult("themes", daisyuimcp.GuideThemes)
-		},
-	)
-
-	mcp.AddTool(
-		server,
-		&mcp.Tool{
-			Name: "get_base_style_docs",
-			Description: "Get the DaisyUI base style documentation. " +
-				"Describes the default base/reset styles applied by daisyUI and how to control them.",
-		},
-		func(
-			_ context.Context,
-			_ *mcp.CallToolRequest,
-			_ GetGuideInput,
-		) (*mcp.CallToolResult, DocumentOutput, error) {
-			return guideToolResult("base", daisyuimcp.GuideBase)
-		},
-	)
-
-	mcp.AddTool(
-		server,
-		&mcp.Tool{
-			Name: "get_utilities_docs",
-			Description: "Get the DaisyUI utility classes and CSS variables documentation. " +
-				"Covers all daisyUI utility classes and CSS custom properties available for styling.",
-		},
-		func(
-			_ context.Context,
-			_ *mcp.CallToolRequest,
-			_ GetGuideInput,
-		) (*mcp.CallToolResult, DocumentOutput, error) {
-			return guideToolResult("utilities", daisyuimcp.GuideUtilities)
-		},
-	)
-
-	mcp.AddTool(
-		server,
-		&mcp.Tool{
-			Name: "get_layout_typography_docs",
-			Description: "Get the DaisyUI layout and typography documentation. " +
-				"Covers layout helpers and typography styles included or recommended with daisyUI.",
-		},
-		func(
-			_ context.Context,
-			_ *mcp.CallToolRequest,
-			_ GetGuideInput,
-		) (*mcp.CallToolResult, DocumentOutput, error) {
-			return guideToolResult("layout-and-typography", daisyuimcp.GuideLayoutTypography)
-		},
-	)
+	registerGuideTools(server)
 
 	mcp.AddTool(
 		server,
@@ -366,6 +318,9 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 			input GenerateThemeInput,
 		) (*mcp.CallToolResult, ThemeOutput, error) {
 			themeInput := theme.ThemeInput{
+				Name:           input.Name,
+				Default:        input.Default,
+				PrefersDark:    input.PrefersDark,
 				Primary:        input.Primary,
 				Secondary:      input.Secondary,
 				Accent:         input.Accent,
@@ -406,16 +361,12 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 			_ *mcp.CallToolRequest,
 			input GenerateThemeFromImageInput,
 		) (*mcp.CallToolResult, ImageThemeOutput, error) {
-			var source string
-			if input.ImageURL != "" {
-				source = input.ImageURL
-			} else if input.ImagePath != "" {
-				source = input.ImagePath
-			} else {
+			source, err := imageSource(input)
+			if err != nil {
 				return &mcp.CallToolResult{
 					IsError: true,
 					Content: []mcp.Content{
-						&mcp.TextContent{Text: "Error: Either image_path or image_url must be provided."},
+						&mcp.TextContent{Text: "Error: " + err.Error()},
 					},
 				}, ImageThemeOutput{}, nil
 			}
@@ -429,6 +380,9 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 					},
 				}, ImageThemeOutput{}, nil
 			}
+			themeInput.Name = input.Name
+			themeInput.Default = input.Default
+			themeInput.PrefersDark = input.PrefersDark
 
 			generated := theme.GenerateTheme(themeInput)
 			warnings := append([]string{}, generated.Warnings...)
@@ -436,7 +390,7 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 				warnings = append(warnings, "The image did not contain a vibrant primary swatch; the default primary color was used.")
 			}
 
-			extractedColors := fmt.Sprintf("/* Extracted Colors from %s:\n", source)
+			extractedColors := "/* Extracted colors:\n"
 			if themeInput.Primary != "" {
 				extractedColors += fmt.Sprintf("   Primary: %s\n", themeInput.Primary)
 			}
@@ -452,7 +406,10 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 			extractedColors += "*/\n\n"
 
 			output := ImageThemeOutput{
-				Source: source,
+				Source:      source,
+				Name:        generated.Name,
+				Default:     generated.Default,
+				PrefersDark: generated.PrefersDark,
 				ExtractedColors: ExtractedColorsOutput{
 					Primary: themeInput.Primary, Secondary: themeInput.Secondary, Accent: themeInput.Accent, Neutral: themeInput.Neutral,
 				},
@@ -471,6 +428,21 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 	registerRecipeTools(server, recipeIndex)
 	registerDocumentationResources(server, index, docsFS, docsDir, recipeIndex)
 	return server
+}
+
+func imageSource(input GenerateThemeFromImageInput) (string, error) {
+	imagePath := strings.TrimSpace(input.ImagePath)
+	imageURL := strings.TrimSpace(input.ImageURL)
+	if imagePath != "" && imageURL != "" {
+		return "", fmt.Errorf("provide only one of image_path or image_url")
+	}
+	if imageURL != "" {
+		return imageURL, nil
+	}
+	if imagePath != "" {
+		return imagePath, nil
+	}
+	return "", fmt.Errorf("either image_path or image_url must be provided")
 }
 
 func main() {

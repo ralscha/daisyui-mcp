@@ -51,9 +51,12 @@ type ColorPaletteOutput struct {
 }
 
 type ThemeOutput struct {
-	CSS      string                 `json:"css"`
-	Colors   []theme.GeneratedColor `json:"colors"`
-	Warnings []string               `json:"warnings"`
+	Name        string                 `json:"name"`
+	Default     bool                   `json:"default"`
+	PrefersDark bool                   `json:"prefers_dark"`
+	CSS         string                 `json:"css"`
+	Colors      []theme.GeneratedColor `json:"colors"`
+	Warnings    []string               `json:"warnings"`
 }
 
 type ExtractedColorsOutput struct {
@@ -65,6 +68,9 @@ type ExtractedColorsOutput struct {
 
 type ImageThemeOutput struct {
 	Source          string                 `json:"source"`
+	Name            string                 `json:"name"`
+	Default         bool                   `json:"default"`
+	PrefersDark     bool                   `json:"prefers_dark"`
 	ExtractedColors ExtractedColorsOutput  `json:"extracted_colors"`
 	CSS             string                 `json:"css"`
 	Colors          []theme.GeneratedColor `json:"colors"`
@@ -83,15 +89,42 @@ func componentSummaries(index map[string]string, resourceType string) []Componen
 	}
 	sort.Strings(names)
 
+	return componentSummariesForNames(index, names, resourceType)
+}
+
+func componentSummariesForNames(index map[string]string, names []string, resourceType string) []ComponentSummaryOutput {
 	result := make([]ComponentSummaryOutput, 0, len(names))
 	for _, name := range names {
+		description, ok := index[name]
+		if !ok {
+			continue
+		}
 		result = append(result, ComponentSummaryOutput{
 			Name:        name,
-			Description: index[name],
+			Description: description,
 			URI:         fmt.Sprintf("daisyui://%s/%s", resourceType, name),
 		})
 	}
 	return result
+}
+
+func formatComponentSearch(query string, components []ComponentSummaryOutput) string {
+	if len(components) == 0 {
+		return fmt.Sprintf("No daisyUI components matched %q.", query)
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "daisyUI components matching %q (%d result(s)):\n\n", query, len(components))
+	for _, component := range components {
+		fmt.Fprintf(&sb, "  • %s - %s\n", component.Name, component.Description)
+	}
+	return strings.TrimSuffix(sb.String(), "\n")
+}
+
+func componentListToolError(message string) (*mcp.CallToolResult, ComponentListOutput, error) {
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{&mcp.TextContent{Text: message}},
+	}, ComponentListOutput{Components: []ComponentSummaryOutput{}}, nil
 }
 
 func detailedDocumentOutput(name string, page documents.Page) ComponentDocumentOutput {
@@ -129,7 +162,14 @@ func formatDetailedText(output ComponentDocumentOutput) string {
 }
 
 func themeOutput(generated theme.GeneratedTheme) ThemeOutput {
-	return ThemeOutput{CSS: generated.CSS, Colors: generated.Colors, Warnings: generated.Warnings}
+	return ThemeOutput{
+		Name:        generated.Name,
+		Default:     generated.Default,
+		PrefersDark: generated.PrefersDark,
+		CSS:         generated.CSS,
+		Colors:      generated.Colors,
+		Warnings:    generated.Warnings,
+	}
 }
 
 func guideToolResult(name string, content []byte) (*mcp.CallToolResult, DocumentOutput, error) {

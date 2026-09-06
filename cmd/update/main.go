@@ -32,14 +32,21 @@ var guideDocs = []struct{ name, url string }{
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fatalf("cannot determine working directory: %v", err)
+		return fmt.Errorf("cannot determine working directory: %w", err)
 	}
 
 	tempDir, err := os.MkdirTemp(cwd, ".daisyui-update-*")
 	if err != nil {
-		fatalf("cannot create temporary update directory: %v", err)
+		return fmt.Errorf("cannot create temporary update directory: %w", err)
 	}
 	defer func() {
 		if err := os.RemoveAll(tempDir); err != nil {
@@ -49,17 +56,17 @@ func main() {
 
 	componentsDir := filepath.Join(tempDir, "components")
 	if err := os.MkdirAll(componentsDir, 0o755); err != nil {
-		fatalf("cannot create components directory: %v", err)
+		return fmt.Errorf("cannot create components directory: %w", err)
 	}
 
 	docsDir := filepath.Join(tempDir, "docs")
 	if err := os.MkdirAll(docsDir, 0o755); err != nil {
-		fatalf("cannot create docs directory: %v", err)
+		return fmt.Errorf("cannot create docs directory: %w", err)
 	}
 
 	guideDir := filepath.Join(tempDir, "guide")
 	if err := os.MkdirAll(guideDir, 0o755); err != nil {
-		fatalf("cannot create guide directory: %v", err)
+		return fmt.Errorf("cannot create guide directory: %w", err)
 	}
 
 	colorsFilePath := filepath.Join(tempDir, "colors.md")
@@ -68,28 +75,28 @@ func main() {
 
 	req, err := http.NewRequest(http.MethodGet, llmsURL, nil)
 	if err != nil {
-		fatalf("cannot create request: %v", err)
+		return fmt.Errorf("cannot create request: %w", err)
 	}
 	req.Header.Set("User-Agent", "DaisyUI MCP Updater/1.0")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		fatalf("error fetching URL: %v", err)
+		return fmt.Errorf("error fetching URL: %w", err)
 	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			fatalf("error closing response body: %v", err)
-		}
-	}()
 
 	if resp.StatusCode != http.StatusOK {
-		fatalf("unexpected HTTP status: %s", resp.Status)
+		_ = resp.Body.Close()
+		return fmt.Errorf("unexpected HTTP status: %s", resp.Status)
 	}
 
-	body, err := readLimited(resp.Body, maxLLMSBytes)
-	if err != nil {
-		fatalf("error reading response body: %v", err)
+	body, readErr := readLimited(resp.Body, maxLLMSBytes)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("error reading response body: %w", readErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("error closing response body: %w", closeErr)
 	}
 	content := string(body)
 
@@ -101,6 +108,8 @@ func main() {
 
 	count := 0
 	var componentNames []string
+	seenComponentNames := make(map[string]bool)
+	componentGenerationFailed := false
 	for i, match := range matches {
 		title := strings.TrimSpace(match[1])
 
@@ -124,14 +133,23 @@ func main() {
 		}
 		safeName := sb.String()
 		if safeName == "" {
+			fmt.Fprintf(os.Stderr, "Error: component title %q does not contain a usable file name\n", title)
+			componentGenerationFailed = true
 			continue
 		}
+		if seenComponentNames[safeName] {
+			fmt.Fprintf(os.Stderr, "Error: multiple component sections resolve to %s.md\n", safeName)
+			componentGenerationFailed = true
+			continue
+		}
+		seenComponentNames[safeName] = true
 
 		filePath := filepath.Join(componentsDir, safeName+".md")
 		fileContent := strings.TrimSpace(section) + "\n"
 
 		if err := os.WriteFile(filePath, []byte(fileContent), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", filePath, err)
+			componentGenerationFailed = true
 			continue
 		}
 
@@ -202,26 +220,24 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "Successfully downloaded %d guide documentation pages.\n", guideCount)
 
-	if count == 0 {
-		fatalf("no component files were generated")
-	}
-	if !colorsGenerated {
-		fatalf("colors.md was not generated")
+	if err := validateGeneratedDocumentation(count, componentGenerationFailed, docsCount, guideCount, len(guideDocs), colorsGenerated); err != nil {
+		return fmt.Errorf("generated documentation is incomplete; existing files were left unchanged: %w", err)
 	}
 
 	if err := replaceDir(filepath.Join(cwd, "components"), componentsDir); err != nil {
-		fatalf("cannot replace components directory: %v", err)
+		return fmt.Errorf("cannot replace components directory: %w", err)
 	}
 	if err := replaceDir(filepath.Join(cwd, "docs"), docsDir); err != nil {
-		fatalf("cannot replace docs directory: %v", err)
+		return fmt.Errorf("cannot replace docs directory: %w", err)
 	}
 	if err := replaceDir(filepath.Join(cwd, "guide"), guideDir); err != nil {
-		fatalf("cannot replace guide directory: %v", err)
+		return fmt.Errorf("cannot replace guide directory: %w", err)
 	}
 	if err := replaceFile(filepath.Join(cwd, "colors.md"), colorsFilePath); err != nil {
-		fatalf("cannot replace colors.md: %v", err)
+		return fmt.Errorf("cannot replace colors.md: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "Replaced generated documentation files.")
+	return nil
 }
 
 func downloadFile(client *http.Client, url string) ([]byte, error) {
@@ -238,7 +254,33 @@ func downloadFile(client *http.Client, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
-	return readLimited(resp.Body, maxDocBytes)
+	data, err := readLimited(resp.Body, maxDocBytes)
+	if err != nil {
+		return nil, err
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return nil, fmt.Errorf("response body is empty")
+	}
+	return data, nil
+}
+
+func validateGeneratedDocumentation(componentCount int, componentGenerationFailed bool, detailedCount, guideCount, expectedGuideCount int, colorsGenerated bool) error {
+	if componentCount == 0 {
+		return fmt.Errorf("no component files were generated")
+	}
+	if componentGenerationFailed {
+		return fmt.Errorf("one or more component files could not be generated")
+	}
+	if detailedCount != componentCount {
+		return fmt.Errorf("downloaded %d of %d detailed component documents", detailedCount, componentCount)
+	}
+	if guideCount != expectedGuideCount {
+		return fmt.Errorf("downloaded %d of %d guide documents", guideCount, expectedGuideCount)
+	}
+	if !colorsGenerated {
+		return fmt.Errorf("colors.md was not generated")
+	}
+	return nil
 }
 
 func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
@@ -250,11 +292,6 @@ func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("response is larger than %d bytes", maxBytes)
 	}
 	return data, nil
-}
-
-func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "ERROR: "+format+"\n", args...)
-	os.Exit(1)
 }
 
 func replaceDir(dst, src string) error {

@@ -7,6 +7,8 @@ before:
 builds:
   - main: ./cmd/server
     binary: daisyui-server
+    ldflags:
+      - -s -w -X main.serverVersion={{.Version}}
     env:
       - CGO_ENABLED=0
     goos:

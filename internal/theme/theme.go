@@ -11,6 +11,10 @@ import (
 )
 
 type ThemeInput struct {
+	Name        string `json:"name,omitempty" jsonschema:"Theme name. Defaults to mytheme."`
+	Default     bool   `json:"default,omitempty" jsonschema:"Whether this is the default daisyUI theme."`
+	PrefersDark bool   `json:"prefers_dark,omitempty" jsonschema:"Whether this theme should be selected for a dark system preference."`
+
 	Primary   string `json:"primary" jsonschema:"Primary color (hex or OKLCH). Required."`
 	Secondary string `json:"secondary,omitempty" jsonschema:"Secondary color (hex or OKLCH). Optional."`
 	Accent    string `json:"accent,omitempty" jsonschema:"Accent color (hex or OKLCH). Optional."`
@@ -31,7 +35,12 @@ type ThemeInput struct {
 	Noise          string `json:"noise,omitempty" jsonschema:"Noise. Optional."`
 }
 
-var oklchRegex = regexp.MustCompile(`(?i)^oklch\(\s*([\d.]+)(%)?\s+([\d.]+)\s+([\d.]+)\s*\)$`)
+var (
+	oklchRegex       = regexp.MustCompile(`(?i)^oklch\(\s*([\d.]+)(%)?\s+([\d.]+)\s+([\d.]+)\s*\)$`)
+	themeNameRegex   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	cssLengthRegex   = regexp.MustCompile(`(?i)^(?:0(?:\.0+)?|(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ex|ch|cap|ic|lh|rlh|vw|vh|vi|vb|vmin|vmax|svw|svh|lvw|lvh|dvw|dvh|cm|mm|q|in|pc|pt|%))$`)
+	themeToggleRegex = regexp.MustCompile(`^(?:0(?:\.0+)?|1(?:\.0+)?)$`)
+)
 
 func parseColor(s string, defaultColor colorful.Color) colorful.Color {
 	c, _ := parseColorWithStatus(s, defaultColor)
@@ -39,10 +48,10 @@ func parseColor(s string, defaultColor colorful.Color) colorful.Color {
 }
 
 func parseColorWithStatus(s string, defaultColor colorful.Color) (colorful.Color, bool) {
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return defaultColor, true
 	}
-	s = strings.TrimSpace(s)
 	s = strings.TrimSuffix(s, ";")
 
 	if matches := oklchRegex.FindStringSubmatch(s); len(matches) == 5 {
@@ -71,30 +80,63 @@ func parseColorWithStatus(s string, defaultColor colorful.Color) (colorful.Color
 }
 
 func generateContentColor(c colorful.Color) colorful.Color {
-	l, _, h := c.OkLch()
-	if l > 0.6 {
-		return colorful.OkLch(0.2, 0.05, h)
+	c = cssColor(c)
+	_, _, h := c.OkLch()
+	if math.IsNaN(h) {
+		h = 0
 	}
-	return colorful.OkLch(0.98, 0.01, h)
+
+	dark := cssColor(colorful.OkLch(0.2, 0.03, h))
+	light := cssColor(colorful.OkLch(0.98, 0.01, h))
+	best := dark
+	if contrastRatio(c, light) > contrastRatio(c, dark) {
+		best = light
+	}
+	if contrastRatio(c, best) >= 4.5 {
+		return best
+	}
+
+	// Near the middle of the luminance range, tinted foregrounds can both miss
+	// the WCAG AA target. Pure black or white always gives the stronger fallback.
+	black := colorful.Color{}
+	white := colorful.Color{R: 1, G: 1, B: 1}
+	if contrastRatio(c, white) > contrastRatio(c, black) {
+		return white
+	}
+	return black
 }
 
-func formatOklch(c colorful.Color) string {
+func cssColor(c colorful.Color) colorful.Color {
 	l, chroma, h := c.OkLch()
 	if chroma < 0.0001 || math.IsNaN(h) {
 		h = 0
 	}
-	lStr := strconv.FormatFloat(math.Round(l*100), 'f', -1, 64)
-	cStr := strconv.FormatFloat(math.Round(chroma*1000)/1000, 'f', -1, 64)
-	hStr := strconv.FormatFloat(math.Round(h*1000)/1000, 'f', -1, 64)
+	return colorful.OkLch(
+		math.Round(l*100_000)/100_000,
+		math.Round(chroma*1_000)/1_000,
+		math.Round(h*1_000)/1_000,
+	)
+}
+
+func formatOklch(c colorful.Color) string {
+	l, chroma, h := cssColor(c).OkLch()
+	lStr := strconv.FormatFloat(math.Round(l*100_000)/1_000, 'f', -1, 64)
+	cStr := strconv.FormatFloat(chroma, 'f', -1, 64)
+	hStr := strconv.FormatFloat(h, 'f', -1, 64)
 
 	return fmt.Sprintf("oklch(%s%% %s %s)", lStr, cStr, hStr)
 }
 
-func defaultString(value, fallback string) string {
+func validatedThemeOption(value, fallback, name string, pattern *regexp.Regexp, warnings *[]string) string {
+	value = strings.TrimSpace(value)
 	if value == "" {
 		return fallback
 	}
-	return value
+	if pattern.MatchString(value) {
+		return value
+	}
+	*warnings = append(*warnings, fmt.Sprintf("Invalid %s value %q; the default value %q was used.", name, value, fallback))
+	return fallback
 }
 
 type GeneratedColor struct {
@@ -105,9 +147,12 @@ type GeneratedColor struct {
 }
 
 type GeneratedTheme struct {
-	CSS      string           `json:"css"`
-	Colors   []GeneratedColor `json:"colors"`
-	Warnings []string         `json:"warnings"`
+	Name        string           `json:"name"`
+	Default     bool             `json:"default"`
+	PrefersDark bool             `json:"prefers_dark"`
+	CSS         string           `json:"css"`
+	Colors      []GeneratedColor `json:"colors"`
+	Warnings    []string         `json:"warnings"`
 }
 
 func GenerateTheme(input ThemeInput) GeneratedTheme {
@@ -138,6 +183,7 @@ func GenerateTheme(input ThemeInput) GeneratedTheme {
 			warnings = append(warnings, fmt.Sprintf("Invalid %s color %q; the default value was used.", spec.name, spec.input))
 		}
 	}
+	themeName := validatedThemeOption(input.Name, "mytheme", "theme name", themeNameRegex, &warnings)
 
 	primary := parsed["primary"]
 	secondary := parsed["secondary"]
@@ -162,9 +208,9 @@ func GenerateTheme(input ThemeInput) GeneratedTheme {
 
 	var sb strings.Builder
 	sb.WriteString("@plugin \"daisyui/theme\" {\n")
-	sb.WriteString("  name: \"mytheme\";\n")
-	sb.WriteString("  default: false;\n")
-	sb.WriteString("  prefersdark: false;\n")
+	fmt.Fprintf(&sb, "  name: %q;\n", themeName)
+	fmt.Fprintf(&sb, "  default: %t;\n", input.Default)
+	fmt.Fprintf(&sb, "  prefersdark: %t;\n", input.PrefersDark)
 	if b1L > 0.5 {
 		sb.WriteString("  color-scheme: \"light\";\n")
 	} else {
@@ -210,14 +256,14 @@ func GenerateTheme(input ThemeInput) GeneratedTheme {
 	fmt.Fprintf(&sb, "  --color-error: %s;\n", formatOklch(errorColor))
 	fmt.Fprintf(&sb, "  --color-error-content: %s;\n", formatOklch(errorContent))
 
-	radiusSelector := defaultString(input.RadiusSelector, "0.25rem")
-	radiusField := defaultString(input.RadiusField, "0.25rem")
-	radiusBox := defaultString(input.RadiusBox, "0.5rem")
-	sizeSelector := defaultString(input.SizeSelector, "0.25rem")
-	sizeField := defaultString(input.SizeField, "0.25rem")
-	border := defaultString(input.Border, "1px")
-	depth := defaultString(input.Depth, "0")
-	noise := defaultString(input.Noise, "0")
+	radiusSelector := validatedThemeOption(input.RadiusSelector, "0.25rem", "radius_selector", cssLengthRegex, &warnings)
+	radiusField := validatedThemeOption(input.RadiusField, "0.25rem", "radius_field", cssLengthRegex, &warnings)
+	radiusBox := validatedThemeOption(input.RadiusBox, "0.5rem", "radius_box", cssLengthRegex, &warnings)
+	sizeSelector := validatedThemeOption(input.SizeSelector, "0.25rem", "size_selector", cssLengthRegex, &warnings)
+	sizeField := validatedThemeOption(input.SizeField, "0.25rem", "size_field", cssLengthRegex, &warnings)
+	border := validatedThemeOption(input.Border, "1px", "border", cssLengthRegex, &warnings)
+	depth := validatedThemeOption(input.Depth, "0", "depth", themeToggleRegex, &warnings)
+	noise := validatedThemeOption(input.Noise, "0", "noise", themeToggleRegex, &warnings)
 
 	fmt.Fprintf(&sb, "  --radius-selector: %s;\n", radiusSelector)
 	fmt.Fprintf(&sb, "  --radius-field: %s;\n", radiusField)
@@ -246,11 +292,13 @@ func GenerateTheme(input ThemeInput) GeneratedTheme {
 	}
 	colors := make([]GeneratedColor, 0, len(pairs))
 	for _, pair := range pairs {
-		ratio := contrastRatio(pair.color, pair.content)
+		color := cssColor(pair.color)
+		content := cssColor(pair.content)
+		ratio := contrastRatio(color, content)
 		colors = append(colors, GeneratedColor{
 			Name:          pair.name,
-			Value:         formatOklch(pair.color),
-			ContentValue:  formatOklch(pair.content),
+			Value:         formatOklch(color),
+			ContentValue:  formatOklch(content),
 			ContrastRatio: math.Round(ratio*100) / 100,
 		})
 		if ratio < 4.5 {
@@ -258,7 +306,14 @@ func GenerateTheme(input ThemeInput) GeneratedTheme {
 		}
 	}
 
-	return GeneratedTheme{CSS: sb.String(), Colors: colors, Warnings: warnings}
+	return GeneratedTheme{
+		Name:        themeName,
+		Default:     input.Default,
+		PrefersDark: input.PrefersDark,
+		CSS:         sb.String(),
+		Colors:      colors,
+		Warnings:    warnings,
+	}
 }
 
 func GenerateThemeCSS(input ThemeInput) string {

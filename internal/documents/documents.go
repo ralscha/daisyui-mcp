@@ -116,32 +116,93 @@ func markdownHeadings(content string) []heading {
 	lines := strings.SplitAfter(content, "\n")
 	result := make([]heading, 0)
 	runeOffset := 0
-	inFence := false
+	var fenceCharacter byte
+	fenceLength := 0
 
 	for _, lineWithNewline := range lines {
 		line := strings.TrimSuffix(lineWithNewline, "\n")
-		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			inFence = !inFence
+		line = strings.TrimSuffix(line, "\r")
+		candidate, validIndent := markdownBlockCandidate(line)
+
+		if fenceCharacter != 0 {
+			if validIndent && closesFence(candidate, fenceCharacter, fenceLength) {
+				fenceCharacter = 0
+				fenceLength = 0
+			}
 			runeOffset += len([]rune(lineWithNewline))
 			continue
 		}
-		if !inFence {
-			level := 0
-			for level < len(trimmed) && level < 6 && trimmed[level] == '#' {
-				level++
-			}
-			if level > 0 && len(trimmed) > level && trimmed[level] == ' ' {
-				title := strings.TrimSpace(strings.TrimRight(trimmed[level+1:], "#"))
-				title = strings.TrimSpace(strings.TrimPrefix(title, "~"))
-				if title != "" {
-					result = append(result, heading{title: title, level: level, startRune: runeOffset})
-				}
+		if !validIndent {
+			runeOffset += len([]rune(lineWithNewline))
+			continue
+		}
+		if character, length, ok := opensFence(candidate); ok {
+			fenceCharacter = character
+			fenceLength = length
+			runeOffset += len([]rune(lineWithNewline))
+			continue
+		}
+
+		level := 0
+		for level < len(candidate) && level < 6 && candidate[level] == '#' {
+			level++
+		}
+		if level > 0 && (len(candidate) == level || candidate[level] == ' ' || candidate[level] == '\t') {
+			title := strings.TrimSpace(candidate[level:])
+			title = trimClosingHeadingSequence(title)
+			title = strings.TrimSpace(strings.TrimPrefix(title, "~"))
+			if title != "" {
+				result = append(result, heading{title: title, level: level, startRune: runeOffset})
 			}
 		}
 		runeOffset += len([]rune(lineWithNewline))
 	}
 	return result
+}
+
+func markdownBlockCandidate(line string) (string, bool) {
+	indent := 0
+	for indent < len(line) && line[indent] == ' ' {
+		indent++
+	}
+	if indent > 3 || (indent < len(line) && line[indent] == '\t') {
+		return "", false
+	}
+	return line[indent:], true
+}
+
+func opensFence(line string) (byte, int, bool) {
+	if len(line) < 3 || (line[0] != '`' && line[0] != '~') {
+		return 0, 0, false
+	}
+	character := line[0]
+	length := 1
+	for length < len(line) && line[length] == character {
+		length++
+	}
+	if length < 3 || (character == '`' && strings.ContainsRune(line[length:], '`')) {
+		return 0, 0, false
+	}
+	return character, length, true
+}
+
+func closesFence(line string, character byte, minimumLength int) bool {
+	length := 0
+	for length < len(line) && line[length] == character {
+		length++
+	}
+	return length >= minimumLength && strings.TrimSpace(line[length:]) == ""
+}
+
+func trimClosingHeadingSequence(title string) string {
+	end := len(title)
+	for end > 0 && title[end-1] == '#' {
+		end--
+	}
+	if end == len(title) || end == 0 || (title[end-1] != ' ' && title[end-1] != '\t') {
+		return title
+	}
+	return strings.TrimSpace(title[:end])
 }
 
 func findHeading(headings []heading, requested string) int {

@@ -5,8 +5,10 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -55,5 +57,36 @@ func TestReadLimitedRejectsOversizedImage(t *testing.T) {
 	_, err := readLimited(bytes.NewReader([]byte("123456")), 5)
 	if err == nil {
 		t.Fatal("expected oversized image to be rejected")
+	}
+}
+
+func TestRemoteImagesRejectPrivateNetworks(t *testing.T) {
+	_, err := ExtractThemeFromImageContext(t.Context(), "http://127.0.0.1/image.png")
+	if err == nil || !strings.Contains(err.Error(), "private or non-public") {
+		t.Fatalf("private image URL error = %v, want non-public-address error", err)
+	}
+}
+
+func TestRemoteImagesRejectCredentialsAndUnsupportedSchemes(t *testing.T) {
+	_, err := ExtractThemeFromImageContext(t.Context(), "https://user:secret@example.com/image.png")
+	if err == nil || !strings.Contains(err.Error(), "credentials") {
+		t.Fatalf("credentialed image URL error = %v, want credentials error", err)
+	}
+	_, err = ExtractThemeFromImageContext(t.Context(), "ftp://example.com/image.png")
+	if err == nil || !strings.Contains(err.Error(), "http or https") {
+		t.Fatalf("FTP image URL error = %v, want scheme error", err)
+	}
+}
+
+func TestPublicImageAddressClassification(t *testing.T) {
+	for _, blocked := range []string{"127.0.0.1", "10.0.0.1", "100.64.0.1", "169.254.169.254", "192.0.2.1", "::1", "fc00::1", "2001:db8::1"} {
+		if isPublicImageAddress(net.ParseIP(blocked)) {
+			t.Errorf("isPublicImageAddress(%s) = true, want false", blocked)
+		}
+	}
+	for _, public := range []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"} {
+		if !isPublicImageAddress(net.ParseIP(public)) {
+			t.Errorf("isPublicImageAddress(%s) = false, want true", public)
+		}
 	}
 }

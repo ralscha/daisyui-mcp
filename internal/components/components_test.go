@@ -70,6 +70,16 @@ func TestLoadIndexFS_DescriptionContent(t *testing.T) {
 	}
 }
 
+func TestLoadIndexFSUsesFileSlugAndFirstNonEmptyDescription(t *testing.T) {
+	fsys := makeFS(map[string]string{
+		"button": "### Button component\n\nA clickable action.\n",
+	})
+	index := components.LoadIndexFS(fsys, "components")
+	if index["button"] != "A clickable action." {
+		t.Fatalf("index = %#v, want file slug and first non-empty description", index)
+	}
+}
+
 func TestLoadIndexFS_EmptyDir(t *testing.T) {
 	fsys := fstest.MapFS{}
 	index := components.LoadIndexFS(fsys, "components")
@@ -180,6 +190,35 @@ func TestSuggestions_NoMatch(t *testing.T) {
 	got := components.Suggestions(index, "zzz")
 	if len(got) != 0 {
 		t.Errorf("expected no suggestions for completely unrelated name, got %v", got)
+	}
+}
+
+func TestSearchRanksNameBeforeDescriptionAndRequiresEveryTerm(t *testing.T) {
+	index := map[string]string{
+		"button":      "Triggers an action.",
+		"join":        "Groups buttons into one control.",
+		"radio":       "Select one option.",
+		"submit-card": "Displays submitted content.",
+	}
+
+	got := components.Search(index, "button action", 10)
+	if !slices.Equal(got, []string{"button"}) {
+		t.Fatalf("Search() = %v, want [button]", got)
+	}
+
+	got = components.Search(index, "button", 10)
+	if !slices.Equal(got, []string{"button", "join"}) {
+		t.Fatalf("Search() ranking = %v, want [button join]", got)
+	}
+}
+
+func TestSearchHonorsLimitAndEmptyQuery(t *testing.T) {
+	index := map[string]string{"button": "Action", "button-group": "Actions"}
+	if got := components.Search(index, "button", 1); !slices.Equal(got, []string{"button"}) {
+		t.Fatalf("Search(limit 1) = %v, want [button]", got)
+	}
+	if got := components.Search(index, "  ", 10); len(got) != 0 {
+		t.Fatalf("Search(empty) = %v, want no results", got)
 	}
 }
 

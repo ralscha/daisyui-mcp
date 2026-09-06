@@ -63,3 +63,61 @@ func TestGenerateThemeReturnsColorsContrastAndWarnings(t *testing.T) {
 		t.Fatalf("warnings = %v, want an invalid primary warning", result.Warnings)
 	}
 }
+
+func TestGenerateThemeSupportsMetadata(t *testing.T) {
+	result := GenerateTheme(ThemeInput{
+		Name:        "brand-dark",
+		Default:     true,
+		PrefersDark: true,
+		Primary:     "#2563eb",
+	})
+	for _, want := range []string{`name: "brand-dark";`, "default: true;", "prefersdark: true;"} {
+		if !strings.Contains(result.CSS, want) {
+			t.Fatalf("generated CSS missing %q:\n%s", want, result.CSS)
+		}
+	}
+}
+
+func TestGenerateThemeRejectsUnsafeOptions(t *testing.T) {
+	result := GenerateTheme(ThemeInput{
+		Name:           `bad\"; } body { color: red`,
+		Primary:        "#2563eb",
+		RadiusSelector: "1rem; color: red",
+		Depth:          "url(https://example.com)",
+	})
+	if strings.Contains(result.CSS, "body") || strings.Contains(result.CSS, "url(") {
+		t.Fatalf("unsafe option was emitted into CSS:\n%s", result.CSS)
+	}
+	if len(result.Warnings) < 3 {
+		t.Fatalf("warnings = %v, want invalid-option warnings", result.Warnings)
+	}
+}
+
+func TestGeneratedContentColorsMeetWCAGAA(t *testing.T) {
+	for _, background := range []string{"#000000", "#555555", "#777777", "#999999", "#ffffff", "oklch(55% 0.3 240)"} {
+		result := GenerateTheme(ThemeInput{Primary: background})
+		primary := result.Colors[0]
+		if primary.Name != "base-100" {
+			t.Fatalf("first generated color = %q, want base-100", primary.Name)
+		}
+		for _, color := range result.Colors {
+			if color.ContrastRatio < 4.5 {
+				t.Fatalf("%s background %s has contrast %.2f, want at least 4.5", color.Name, background, color.ContrastRatio)
+			}
+		}
+	}
+}
+
+func TestGeneratedContentColorMeetsWCAGAAAcrossColorSpace(t *testing.T) {
+	for lightness := 0.0; lightness <= 1.0; lightness += 0.05 {
+		for _, chroma := range []float64{0, 0.1, 0.2, 0.3} {
+			for hue := 0.0; hue < 360; hue += 30 {
+				background := cssColor(colorful.OkLch(lightness, chroma, hue))
+				content := generateContentColor(background)
+				if ratio := contrastRatio(background, content); ratio < 4.5 {
+					t.Fatalf("background L=%f C=%f H=%f has contrast %.3f, want at least 4.5", lightness, chroma, hue, ratio)
+				}
+			}
+		}
+	}
+}
