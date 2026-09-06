@@ -22,6 +22,8 @@ func detailedDocURL(name string) string {
 	return "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/components/" + name + "/+page.md"
 }
 
+var componentDocLinkRe = regexp.MustCompile(`\[[^\]\r\n]+\]\(https://daisyui\.com/components/([a-z0-9]+(?:-[a-z0-9]+)*)/?(?:#[^)\s]*)?\)`)
+
 var guideDocs = []struct{ name, url string }{
 	{"customize", "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/docs/customize/+page.md?plain=1"},
 	{"config", "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/docs/config/+page.md?plain=1"},
@@ -125,15 +127,9 @@ func run() error {
 			continue
 		}
 
-		var sb strings.Builder
-		for _, ch := range strings.ToLower(title) {
-			if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
-				sb.WriteRune(ch)
-			}
-		}
-		safeName := sb.String()
-		if safeName == "" {
-			fmt.Fprintf(os.Stderr, "Error: component title %q does not contain a usable file name\n", title)
+		safeName, nameErr := componentNameFromSection(section)
+		if nameErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: cannot determine canonical name for component %q: %v\n", title, nameErr)
 			componentGenerationFailed = true
 			continue
 		}
@@ -262,6 +258,14 @@ func downloadFile(client *http.Client, url string) ([]byte, error) {
 		return nil, fmt.Errorf("response body is empty")
 	}
 	return data, nil
+}
+
+func componentNameFromSection(section string) (string, error) {
+	match := componentDocLinkRe.FindStringSubmatch(section)
+	if len(match) != 2 {
+		return "", fmt.Errorf("canonical daisyUI component documentation link not found")
+	}
+	return match[1], nil
 }
 
 func validateGeneratedDocumentation(componentCount int, componentGenerationFailed bool, detailedCount, guideCount, expectedGuideCount int, colorsGenerated bool) error {

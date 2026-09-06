@@ -50,3 +50,61 @@ func TestReadLimitedAndDownloadValidation(t *testing.T) {
 		t.Fatalf("downloadFile empty response error = %v, want empty-body error", err)
 	}
 }
+
+func TestComponentNameFromSection(t *testing.T) {
+	tests := []struct {
+		name    string
+		section string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "title words become hyphenated slug",
+			section: "### File input\n[File input documentation](https://daisyui.com/components/file-input/)\n#### Class names\n",
+			want:    "file-input",
+		},
+		{
+			name:    "canonical slug can reorder title words",
+			section: "### Browser mockup\n[Browser mockup documentation](https://daisyui.com/components/mockup-browser/)\n#### Syntax\n",
+			want:    "mockup-browser",
+		},
+		{
+			name:    "fragment is accepted",
+			section: "[Theme controller documentation](https://daisyui.com/components/theme-controller/#example)",
+			want:    "theme-controller",
+		},
+		{
+			name:    "untrusted host is rejected",
+			section: "[Button documentation](https://example.com/components/button/)",
+			wantErr: true,
+		},
+		{
+			name:    "unsafe path is rejected",
+			section: "[Button documentation](https://daisyui.com/components/../button/)",
+			wantErr: true,
+		},
+		{
+			name:    "missing link is rejected",
+			section: "### Button\n#### Class names\n",
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := componentNameFromSection(test.section)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("componentNameFromSection() = %q, want error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("componentNameFromSection() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("componentNameFromSection() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
