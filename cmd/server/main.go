@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 
@@ -37,7 +38,7 @@ func docsSource() (fs.FS, string) {
 // Input types
 type ListComponentsInput struct{}
 type SearchComponentsInput struct {
-	Query string `json:"query" jsonschema:"Words to match against component names and descriptions. Required."`
+	Query string `json:"query" jsonschema:"Words to match against names and descriptions. Required."`
 	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of results. Defaults to 10 and cannot exceed 50."`
 }
 type GetComponentInput struct {
@@ -133,21 +134,14 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 			_ *mcp.CallToolRequest,
 			input SearchComponentsInput,
 		) (*mcp.CallToolResult, ComponentListOutput, error) {
-			query := strings.TrimSpace(input.Query)
-			limit := input.Limit
-			if query == "" {
-				return componentListToolError("Search query must not be empty.")
-			}
-			if limit < 0 || limit > 50 {
-				return componentListToolError("Search limit must be between 1 and 50.")
-			}
-			if limit == 0 {
-				limit = 10
+			query, limit, err := searchArguments(input)
+			if err != nil {
+				return componentListToolError(err.Error())
 			}
 
 			names := components.Search(index, query, limit)
 			summaries := componentSummariesForNames(index, names, "components")
-			text := formatComponentSearch(query, summaries)
+			text := formatSearch("components", query, summaries)
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, ComponentListOutput{
 				Components: summaries,
 				Count:      len(summaries),
@@ -209,7 +203,7 @@ func newServer(fsys fs.FS, fsDir string, docsFS fs.FS, docsDir string) *mcp.Serv
 				}, DocumentOutput{}, nil
 			}
 
-			output := DocumentOutput{Name: name, URI: "daisyui://components/" + name, Documentation: content, Warnings: []string{}}
+			output := DocumentOutput{Name: name, URI: "daisyui://components/" + url.PathEscape(name), Documentation: content, Warnings: []string{}}
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{
 					&mcp.TextContent{Text: content},
@@ -437,9 +431,20 @@ func imageSource(input GenerateThemeFromImageInput) (string, error) {
 		return "", fmt.Errorf("provide only one of image_path or image_url")
 	}
 	if imageURL != "" {
+		parsed, err := url.Parse(imageURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+			return "", fmt.Errorf("image_url must be an absolute HTTP(S) URL")
+		}
+		if parsed.User != nil {
+			return "", fmt.Errorf("image_url must not include credentials")
+		}
 		return imageURL, nil
 	}
 	if imagePath != "" {
+		lowerPath := strings.ToLower(imagePath)
+		if strings.HasPrefix(lowerPath, "http://") || strings.HasPrefix(lowerPath, "https://") {
+			return "", fmt.Errorf("use image_url for remote images")
+		}
 		return imagePath, nil
 	}
 	return "", fmt.Errorf("either image_path or image_url must be provided")

@@ -3,6 +3,7 @@ package documents
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -24,7 +25,7 @@ type Page struct {
 type heading struct {
 	title     string
 	level     int
-	startRune int
+	startByte int
 }
 
 func Paginate(content, requestedSection string, page, pageSize int) (Page, error) {
@@ -58,27 +59,24 @@ func Paginate(content, requestedSection string, page, pageSize int) (Page, error
 			return Page{}, fmt.Errorf("section %q not found; available sections: %s", requestedSection, strings.Join(available, ", "))
 		}
 		section = headings[match].title
-		allRunes := []rune(content)
-		end := len(allRunes)
+		end := len(content)
 		for i := match + 1; i < len(headings); i++ {
 			if headings[i].level <= headings[match].level {
-				end = headings[i].startRune
+				end = headings[i].startByte
 				break
 			}
 		}
-		selected = strings.TrimSpace(string(allRunes[headings[match].startRune:end])) + "\n"
+		selected = strings.TrimSpace(content[headings[match].startByte:end]) + "\n"
 	}
 
-	runes := []rune(selected)
-	totalCharacters := len(runes)
-	pages := splitPages(runes, pageSize)
-	totalPages := len(pages)
+	totalCharacters := utf8.RuneCountInString(selected)
+	pageContent, totalPages := selectPage(selected, page, pageSize)
 	if page > totalPages {
 		return Page{}, fmt.Errorf("page %d is out of range; document has %d page(s)", page, totalPages)
 	}
 
 	return Page{
-		Content:           pages[page-1],
+		Content:           pageContent,
 		Section:           section,
 		AvailableSections: available,
 		Page:              page,
@@ -89,37 +87,43 @@ func Paginate(content, requestedSection string, page, pageSize int) (Page, error
 	}, nil
 }
 
-func splitPages(content []rune, pageSize int) []string {
+// selectPage counts pages without allocating copies of the complete document or
+// every page. Byte offsets always follow complete runes, including for Unicode.
+func selectPage(content string, requestedPage, pageSize int) (string, int) {
 	if len(content) == 0 {
-		return []string{""}
+		return "", 1
 	}
 
-	pages := make([]string, 0, (len(content)+pageSize-1)/pageSize)
+	var selected string
+	totalPages := 0
 	for start := 0; start < len(content); {
-		end := min(start+pageSize, len(content))
-		if end < len(content) {
-			minimumBreak := start + pageSize/2
-			for candidate := end; candidate > minimumBreak; candidate-- {
-				if content[candidate-1] == '\n' {
-					end = candidate
-					break
-				}
+		end, lastBreak := start, 0
+		for count := 1; count <= pageSize && end < len(content); count++ {
+			r, width := utf8.DecodeRuneInString(content[end:])
+			end += width
+			if r == '\n' && count > pageSize/2 {
+				lastBreak = end
 			}
 		}
-		pages = append(pages, string(content[start:end]))
+		if end < len(content) && lastBreak > start {
+			end = lastBreak
+		}
+		totalPages++
+		if totalPages == requestedPage {
+			selected = content[start:end]
+		}
 		start = end
 	}
-	return pages
+	return selected, totalPages
 }
 
 func markdownHeadings(content string) []heading {
-	lines := strings.SplitAfter(content, "\n")
 	result := make([]heading, 0)
-	runeOffset := 0
+	byteOffset := 0
 	var fenceCharacter byte
 	fenceLength := 0
 
-	for _, lineWithNewline := range lines {
+	for lineWithNewline := range strings.SplitAfterSeq(content, "\n") {
 		line := strings.TrimSuffix(lineWithNewline, "\n")
 		line = strings.TrimSuffix(line, "\r")
 		candidate, validIndent := markdownBlockCandidate(line)
@@ -129,17 +133,17 @@ func markdownHeadings(content string) []heading {
 				fenceCharacter = 0
 				fenceLength = 0
 			}
-			runeOffset += len([]rune(lineWithNewline))
+			byteOffset += len(lineWithNewline)
 			continue
 		}
 		if !validIndent {
-			runeOffset += len([]rune(lineWithNewline))
+			byteOffset += len(lineWithNewline)
 			continue
 		}
 		if character, length, ok := opensFence(candidate); ok {
 			fenceCharacter = character
 			fenceLength = length
-			runeOffset += len([]rune(lineWithNewline))
+			byteOffset += len(lineWithNewline)
 			continue
 		}
 
@@ -152,10 +156,10 @@ func markdownHeadings(content string) []heading {
 			title = trimClosingHeadingSequence(title)
 			title = strings.TrimSpace(strings.TrimPrefix(title, "~"))
 			if title != "" {
-				result = append(result, heading{title: title, level: level, startRune: runeOffset})
+				result = append(result, heading{title: title, level: level, startByte: byteOffset})
 			}
 		}
-		runeOffset += len([]rune(lineWithNewline))
+		byteOffset += len(lineWithNewline)
 	}
 	return result
 }

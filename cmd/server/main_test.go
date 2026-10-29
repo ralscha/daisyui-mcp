@@ -23,9 +23,12 @@ func testServer(t *testing.T) *mcp.ClientSession {
 	detailedFS := fstest.MapFS{
 		"docs/button.md": {Data: []byte("# Button\n\nIntroduction.\n\n## Sizes\n\n" + strings.Repeat("Size details. ", 20) + "\n\n## Colors\n\nColor details.\n")},
 	}
+	return connectTestServer(t, newServer(shortFS, "components", detailedFS, "docs"))
+}
 
+func connectTestServer(t *testing.T, server *mcp.Server) *mcp.ClientSession {
+	t.Helper()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	server := newServer(shortFS, "components", detailedFS, "docs")
 	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
 	if err != nil {
 		t.Fatalf("server.Connect() error = %v", err)
@@ -39,6 +42,53 @@ func testServer(t *testing.T) *mcp.ClientSession {
 	}
 	t.Cleanup(func() { _ = clientSession.Close() })
 	return clientSession
+}
+
+func TestServerReadsDirectoryRootOverrides(t *testing.T) {
+	shortFS := fstest.MapFS{"button.md": {Data: []byte("### Button\nOverride summary.\n")}}
+	detailedFS := fstest.MapFS{"button.md": {Data: []byte("# Button\nOverride details.\n")}}
+	client := connectTestServer(t, newServer(shortFS, ".", detailedFS, "."))
+	for _, toolName := range []string{"get_short_doc", "get_detailed_doc"} {
+		result, err := client.CallTool(t.Context(), &mcp.CallToolParams{Name: toolName, Arguments: map[string]any{"name": "button"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError {
+			t.Fatalf("%s could not read root directory override: %#v", toolName, result.Content)
+		}
+	}
+	result, err := client.ReadResource(t.Context(), &mcp.ReadResourceParams{URI: "daisyui://components/button"})
+	if err != nil || len(result.Contents) != 1 || !strings.Contains(result.Contents[0].Text, "Override details.") {
+		t.Fatalf("ReadResource(root override) = %#v, %v", result, err)
+	}
+}
+
+func TestDocumentationResourceURIs(t *testing.T) {
+	fsys := fstest.MapFS{
+		"docs/button.md": {Data: []byte("Button")},
+		"docs/100%.md":   {Data: []byte("Percent")},
+	}
+	handler := documentationResourceHandler(fsys, "docs", nil)
+	for _, uri := range []string{
+		"daisyui://components/button?ignored=true",
+		"daisyui://components/button?",
+		"daisyui://components/button#ignored",
+		"daisyui://user@components/button",
+		"daisyui://components/%2562utton",
+		"daisyui://components/..%2Fbutton",
+		"daisyui://components/sub%5Cbutton",
+	} {
+		t.Run(uri, func(t *testing.T) {
+			_, err := handler(t.Context(), &mcp.ReadResourceRequest{Params: &mcp.ReadResourceParams{URI: uri}})
+			if err == nil {
+				t.Fatal("invalid or doubly encoded resource URI was accepted")
+			}
+		})
+	}
+	result, err := handler(t.Context(), &mcp.ReadResourceRequest{Params: &mcp.ReadResourceParams{URI: "daisyui://components/100%25"}})
+	if err != nil || len(result.Contents) != 1 || result.Contents[0].Text != "Percent" {
+		t.Fatalf("ReadResource(percent name) = %#v, %v", result, err)
+	}
 }
 
 func TestDetailedDocToolReturnsPagedStructuredContent(t *testing.T) {
@@ -183,6 +233,34 @@ func TestSearchComponentsRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestSearchRecipesReturnsRankedResultsAndValidatesInput(t *testing.T) {
+	client := testServer(t)
+	result, err := client.CallTool(t.Context(), &mcp.CallToolParams{
+		Name: "search_recipes", Arguments: map[string]any{"query": " login ", "limit": 1},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("search_recipes = %#v, %v", result, err)
+	}
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok || structured["count"] != float64(1) {
+		t.Fatalf("unexpected recipe search result: %#v", result.StructuredContent)
+	}
+	recipes, ok := structured["recipes"].([]any)
+	if !ok || len(recipes) != 1 {
+		t.Fatalf("unexpected recipe list: %#v", structured["recipes"])
+	}
+	first, ok := recipes[0].(map[string]any)
+	if !ok || first["name"] != "login-form" || first["uri"] != "daisyui://recipes/login-form" {
+		t.Fatalf("unexpected first recipe: %#v", recipes[0])
+	}
+	for _, input := range []map[string]any{{"query": " "}, {"query": "login", "limit": -1}, {"query": "login", "limit": 51}} {
+		result, err := client.CallTool(t.Context(), &mcp.CallToolParams{Name: "search_recipes", Arguments: input})
+		if err != nil || !result.IsError {
+			t.Fatalf("invalid recipe search input %#v: result %#v, error %v", input, result, err)
+		}
+	}
+}
+
 func TestThemeAndRecipeToolsReturnStructuredContent(t *testing.T) {
 	client := testServer(t)
 
@@ -234,6 +312,30 @@ func TestImageThemeToolRequiresExactlyOneSource(t *testing.T) {
 		}
 		if !result.IsError {
 			t.Fatalf("generate_theme_from_image accepted sources %#v", arguments)
+		}
+	}
+}
+
+func TestImageSourceValidatesSourceKinds(t *testing.T) {
+	for _, input := range []GenerateThemeFromImageInput{
+		{ImageURL: "local.png"},
+		{ImageURL: "file:///tmp/image.png"},
+		{ImageURL: "https:///image.png"},
+		{ImageURL: "https://user:password@example.com/image.png"},
+		{ImagePath: "https://example.com/image.png"},
+	} {
+		if source, err := imageSource(input); err == nil {
+			t.Errorf("imageSource(%+v) accepted invalid source %q", input, source)
+		}
+	}
+	for _, input := range []GenerateThemeFromImageInput{
+		{ImageURL: "https://example.com/image.png"},
+		{ImageURL: "HTTPS://example.com/image.png"},
+		{ImagePath: `C:\images\palette.png`},
+		{ImagePath: "/tmp/palette.png"},
+	} {
+		if _, err := imageSource(input); err != nil {
+			t.Errorf("imageSource(%+v) rejected valid source: %v", input, err)
 		}
 	}
 }

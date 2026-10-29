@@ -2,8 +2,10 @@ version: 2
 
 before:
   hooks:
-    - go mod tidy
     - go run ./cmd/update
+    - go mod verify
+    - go test ./...
+    - go vet ./...
 builds:
   - main: ./cmd/server
     binary: daisyui-server

@@ -30,6 +30,8 @@ tasks:
       - '**/*.go'
       - go.mod
       - go.sum
+      - daisyui.version
+      - colors.md
       - 'docs/**/*.md'
       - 'components/**/*.md'
       - 'guide/**/*.md'
@@ -54,18 +56,18 @@ tasks:
       - go test ./...
 
   lint:
-    desc: Run golangci-lint in a Docker container
+    desc: Run golangci-lint (requires a local installation)
     cmds:
       - golangci-lint run -v --timeout 5m
 
   update:docs:
-    desc: Fetch latest DaisyUI docs
+    desc: Fetch documentation for the release pinned in daisyui.version
     dir: '{{.ROOT_DIR}}'
     cmds:
       - go run ./cmd/update
 
   update:
-    desc: Fetch latest DaisyUI docs and rebuild MCP server
+    desc: Refresh pinned DaisyUI docs and rebuild all binaries
     dir: '{{.ROOT_DIR}}'
     cmds:
       - task: build

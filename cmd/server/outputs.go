@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -102,18 +103,33 @@ func componentSummariesForNames(index map[string]string, names []string, resourc
 		result = append(result, ComponentSummaryOutput{
 			Name:        name,
 			Description: description,
-			URI:         fmt.Sprintf("daisyui://%s/%s", resourceType, name),
+			URI:         fmt.Sprintf("daisyui://%s/%s", resourceType, url.PathEscape(name)),
 		})
 	}
 	return result
 }
 
-func formatComponentSearch(query string, components []ComponentSummaryOutput) string {
+func searchArguments(input SearchComponentsInput) (string, int, error) {
+	query := strings.TrimSpace(input.Query)
+	if query == "" {
+		return "", 0, fmt.Errorf("search query must not be empty")
+	}
+	if input.Limit < 0 || input.Limit > 50 {
+		return "", 0, fmt.Errorf("search limit must be between 1 and 50")
+	}
+	limit := input.Limit
+	if limit == 0 {
+		limit = 10
+	}
+	return query, limit, nil
+}
+
+func formatSearch(kind, query string, components []ComponentSummaryOutput) string {
 	if len(components) == 0 {
-		return fmt.Sprintf("No daisyUI components matched %q.", query)
+		return fmt.Sprintf("No daisyUI %s matched %q.", kind, query)
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "daisyUI components matching %q (%d result(s)):\n\n", query, len(components))
+	fmt.Fprintf(&sb, "daisyUI %s matching %q (%d result(s)):\n\n", kind, query, len(components))
 	for _, component := range components {
 		fmt.Fprintf(&sb, "  • %s - %s\n", component.Name, component.Description)
 	}
@@ -130,7 +146,7 @@ func componentListToolError(message string) (*mcp.CallToolResult, ComponentListO
 func detailedDocumentOutput(name string, page documents.Page) ComponentDocumentOutput {
 	return ComponentDocumentOutput{
 		Name:              name,
-		URI:               "daisyui://components/" + name,
+		URI:               "daisyui://components/" + url.PathEscape(name),
 		Documentation:     page.Content,
 		Section:           page.Section,
 		AvailableSections: page.AvailableSections,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
+	"path"
 	"sort"
 	"strings"
 
@@ -89,8 +90,8 @@ func registerDocumentationResources(
 	}
 
 	for _, component := range componentSummaries(componentIndex, "components") {
-		content, err := components.GetContentFS(docsFS, docsDir, component.Name)
-		if err != nil {
+		info, err := fs.Stat(docsFS, path.Join(docsDir, component.Name+".md"))
+		if err != nil || info.IsDir() {
 			continue
 		}
 		server.AddResource(&mcp.Resource{
@@ -98,7 +99,7 @@ func registerDocumentationResources(
 			Title:       component.Name,
 			Description: component.Description,
 			MIMEType:    "text/markdown",
-			Size:        int64(len(content)),
+			Size:        info.Size(),
 			URI:         component.URI,
 		}, handler)
 	}
@@ -121,8 +122,8 @@ func registerDocumentationResources(
 	}
 
 	for _, recipe := range componentSummaries(recipeIndex, "recipes") {
-		content, err := components.GetContentFS(daisyuimcp.RecipesFS, "recipes", recipe.Name)
-		if err != nil {
+		info, err := fs.Stat(daisyuimcp.RecipesFS, "recipes/"+recipe.Name+".md")
+		if err != nil || info.IsDir() {
 			continue
 		}
 		server.AddResource(&mcp.Resource{
@@ -130,21 +131,24 @@ func registerDocumentationResources(
 			Title:       strings.ReplaceAll(recipe.Name, "-", " "),
 			Description: recipe.Description,
 			MIMEType:    "text/markdown",
-			Size:        int64(len(content)),
+			Size:        info.Size(),
 			URI:         recipe.URI,
 		}, handler)
 	}
 }
 
 func documentationResourceHandler(docsFS fs.FS, docsDir string, recipeIndex map[string]string) mcp.ResourceHandler {
+	guides := guideDocuments()
 	return func(_ context.Context, request *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		uri := request.Params.URI
 		parsed, err := url.Parse(uri)
-		if err != nil || parsed.Scheme != "daisyui" {
+		if err != nil || parsed.Scheme != "daisyui" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
 			return nil, mcp.ResourceNotFoundError(uri)
 		}
-		name, err := url.PathUnescape(strings.TrimPrefix(parsed.Path, "/"))
-		if err != nil || name == "" || strings.Contains(name, "/") {
+		// url.Parse has already decoded Path. Unescaping it again corrupts
+		// legitimate percent signs and allows doubly encoded names to alias files.
+		name := strings.TrimPrefix(parsed.Path, "/")
+		if name == "" || strings.ContainsAny(name, "/\\") {
 			return nil, mcp.ResourceNotFoundError(uri)
 		}
 
@@ -153,7 +157,7 @@ func documentationResourceHandler(docsFS fs.FS, docsDir string, recipeIndex map[
 		case "components":
 			content, err = components.GetContentFS(docsFS, docsDir, name)
 		case "guides":
-			data, ok := guideDocuments()[name]
+			data, ok := guides[name]
 			if !ok {
 				err = fmt.Errorf("guide not found")
 			} else {
@@ -181,6 +185,26 @@ func documentationResourceHandler(docsFS fs.FS, docsDir string, recipeIndex map[
 }
 
 func registerRecipeTools(server *mcp.Server, recipeIndex map[string]string) {
+	mcp.AddTool(
+		server,
+		&mcp.Tool{
+			Name:        "search_recipes",
+			Description: "Search curated daisyUI composition recipes by name and description. Results are ordered by relevance.",
+		},
+		func(_ context.Context, _ *mcp.CallToolRequest, input SearchComponentsInput) (*mcp.CallToolResult, RecipeListOutput, error) {
+			query, limit, err := searchArguments(input)
+			if err != nil {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, RecipeListOutput{}, nil
+			}
+			names := components.Search(recipeIndex, query, limit)
+			recipes := componentSummariesForNames(recipeIndex, names, "recipes")
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: formatSearch("recipes", query, recipes)}}}, RecipeListOutput{
+				Recipes: recipes,
+				Count:   len(recipes),
+			}, nil
+		},
+	)
+
 	mcp.AddTool(
 		server,
 		&mcp.Tool{

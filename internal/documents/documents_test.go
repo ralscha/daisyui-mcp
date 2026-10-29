@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const sampleDocument = `# Button
@@ -125,5 +126,35 @@ func TestMarkdownHeadingsTracksFenceCharacterAndLength(t *testing.T) {
 	}
 	if !slices.Equal(result.AvailableSections, []string{"Real", "Visible"}) {
 		t.Fatalf("sections = %v, want [Real Visible]", result.AvailableSections)
+	}
+}
+
+func TestPaginatePreservesUnicodeAcrossEveryPage(t *testing.T) {
+	content := "# Café 🐱\n\n" + strings.Repeat("你好 café 🐱\n", 8) + "\n## Résumé\nThe end.\n"
+	for _, size := range []int{1, 2, 5, 10, 17, 100} {
+		var joined strings.Builder
+		for number := 1; ; number++ {
+			page, err := Paginate(content, "", number, size)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !utf8.ValidString(page.Content) || utf8.RuneCountInString(page.Content) > size {
+				t.Fatalf("size %d, page %d split a rune or exceeded its size: %q", size, number, page.Content)
+			}
+			if page.TotalCharacters != utf8.RuneCountInString(content) {
+				t.Fatalf("wrong Unicode character count: %d", page.TotalCharacters)
+			}
+			joined.WriteString(page.Content)
+			if !page.HasMore {
+				break
+			}
+		}
+		if joined.String() != content {
+			t.Fatalf("size %d pagination lost or repeated content", size)
+		}
+	}
+	section, err := Paginate(content, "Résumé", 1, 100)
+	if err != nil || section.Content != "## Résumé\nThe end.\n" {
+		t.Fatalf("section following Unicode = %#v, %v", section, err)
 	}
 }

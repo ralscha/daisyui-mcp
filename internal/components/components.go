@@ -37,7 +37,7 @@ func FormatList(index map[string]string) string {
 func LoadIndexFS(fsys fs.FS, dir string) map[string]string {
 	index := make(map[string]string)
 
-	entries, err := fs.Glob(fsys, dir+"/*.md")
+	entries, err := fs.Glob(fsys, path.Join(dir, "*.md"))
 	if err != nil || len(entries) == 0 {
 		return index
 	}
@@ -76,19 +76,23 @@ func LoadIndexFS(fsys fs.FS, dir string) map[string]string {
 
 func GetContentFS(fsys fs.FS, dir, name string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
-	if strings.ContainsAny(normalized, "/\\") {
+	if normalized == "" || strings.ContainsAny(normalized, "/\\") {
 		return "", fmt.Errorf("invalid component name: %q", name)
 	}
-	path := dir + "/" + normalized + ".md"
+	filePath := path.Join(dir, normalized+".md")
 
-	data, err := fs.ReadFile(fsys, path)
+	data, err := fs.ReadFile(fsys, filePath)
 	if err != nil {
-		return "", fmt.Errorf("component not found in embedded FS: %s", path)
+		return "", fmt.Errorf("read component %q: %w", normalized, err)
 	}
 	return string(data), nil
 }
 
 func Suggestions(index map[string]string, name string) []string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return []string{}
+	}
 	type candidate struct {
 		key   string
 		score int
@@ -153,6 +157,9 @@ func Search(index map[string]string, query string, limit int) []string {
 					break
 				}
 				score += fuzzyScore / 2
+			}
+			if !matched {
+				break
 			}
 		}
 		if matched {

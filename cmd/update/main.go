@@ -1,37 +1,38 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
-const llmsURL = "https://daisyui.com/llms.txt"
-
 const (
-	maxLLMSBytes = 25 << 20
-	maxDocBytes  = 5 << 20
+	maxDocBytes     = 5 << 20
+	downloadWorkers = 6
 )
 
-func detailedDocURL(name string) string {
-	return "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/components/" + name + "/+page.md"
+func sourceURL(version, path string) string {
+	return "https://raw.githubusercontent.com/saadeghi/daisyui/refs/tags/v" + version + "/" + path
 }
 
 var componentDocLinkRe = regexp.MustCompile(`\[[^\]\r\n]+\]\(https://daisyui\.com/components/([a-z0-9]+(?:-[a-z0-9]+)*)/?(?:#[^)\s]*)?\)`)
+var componentIndexLinkRe = regexp.MustCompile(`\[[^\]\r\n]+\]\(\./components/([^\s)]+)\.md\)`)
+var componentNameRe = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var versionRe = regexp.MustCompile(`^5\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$`)
+var colorsHeadingRe = regexp.MustCompile(`(?m)^## daisyUI 5 colors[\t ]*\r?$`)
 
-var guideDocs = []struct{ name, url string }{
-	{"customize", "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/docs/customize/+page.md?plain=1"},
-	{"config", "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/docs/config/+page.md?plain=1"},
-	{"themes", "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/docs/themes/+page.md?plain=1"},
-	{"base", "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/docs/base/+page.md?plain=1"},
-	{"utilities", "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/docs/utilities/+page.md?plain=1"},
-	{"layout-and-typography", "https://raw.githubusercontent.com/saadeghi/daisyui/refs/heads/master/packages/docs/src/routes/(routes)/docs/layout-and-typography/+page.md?plain=1"},
-}
+type documentDownload struct{ name, url string }
+
+var guideNames = []string{"customize", "config", "themes", "base", "utilities", "layout-and-typography"}
 
 func main() {
 	if err := run(); err != nil {
@@ -44,6 +45,14 @@ func run() error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cannot determine working directory: %w", err)
+	}
+	versionData, err := os.ReadFile(filepath.Join(cwd, "daisyui.version"))
+	if err != nil {
+		return fmt.Errorf("cannot read daisyui.version; run the updater from the project root: %w", err)
+	}
+	version, err := parseVersion(string(versionData))
+	if err != nil {
+		return err
 	}
 
 	tempDir, err := os.MkdirTemp(cwd, ".daisyui-update-*")
@@ -73,124 +82,51 @@ func run() error {
 
 	colorsFilePath := filepath.Join(tempDir, "colors.md")
 
-	fmt.Fprintf(os.Stderr, "Fetching %s...\n", llmsURL)
-
-	req, err := http.NewRequest(http.MethodGet, llmsURL, nil)
-	if err != nil {
-		return fmt.Errorf("cannot create request: %w", err)
-	}
-	req.Header.Set("User-Agent", "DaisyUI MCP Updater/1.0")
-
+	fmt.Fprintf(os.Stderr, "Fetching documentation for daisyUI %s...\n", version)
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	index, err := downloadFile(client, sourceURL(version, "skills/daisyui/SKILL.md"))
 	if err != nil {
-		return fmt.Errorf("error fetching URL: %w", err)
+		return fmt.Errorf("error fetching component index: %w", err)
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		_ = resp.Body.Close()
-		return fmt.Errorf("unexpected HTTP status: %s", resp.Status)
+	componentNames, err := componentNamesFromIndex(string(index))
+	if err != nil {
+		return fmt.Errorf("invalid component index: %w", err)
 	}
-
-	body, readErr := readLimited(resp.Body, maxLLMSBytes)
-	closeErr := resp.Body.Close()
-	if readErr != nil {
-		return fmt.Errorf("error reading response body: %w", readErr)
+	summaries := make([]documentDownload, 0, len(componentNames))
+	componentDocs := make([]documentDownload, 0, len(componentNames))
+	for _, name := range componentNames {
+		summaries = append(summaries, documentDownload{name, sourceURL(version, "skills/daisyui/components/"+name+".md")})
+		componentDocs = append(componentDocs, documentDownload{name, sourceURL(version, "packages/docs/src/routes/(routes)/components/"+name+"/+page.md")})
 	}
-	if closeErr != nil {
-		return fmt.Errorf("error closing response body: %w", closeErr)
+	fmt.Fprintf(os.Stderr, "Downloading %d component summaries...\n", len(summaries))
+	count := downloadDocuments(client, componentsDir, summaries)
+	if count != len(componentNames) {
+		return fmt.Errorf("downloaded %d of %d component summaries; existing files were left unchanged", count, len(componentNames))
 	}
-	content := string(body)
-
-	headerRe := regexp.MustCompile(`(?m)^### (.*)$`)
-	loc := headerRe.FindAllStringIndex(content, -1)
-	matches := headerRe.FindAllStringSubmatch(content, -1)
-
-	fmt.Fprintf(os.Stderr, "Found %d potential sections.\n", len(matches))
-
-	count := 0
-	var componentNames []string
-	seenComponentNames := make(map[string]bool)
 	componentGenerationFailed := false
-	for i, match := range matches {
-		title := strings.TrimSpace(match[1])
-
-		start := loc[i][0]
-		end := len(content)
-		if i+1 < len(loc) {
-			end = loc[i+1][0]
-		}
-
-		section := content[start:end]
-
-		if !strings.Contains(section, "#### Class names") && !strings.Contains(section, "#### Syntax") {
-			continue
-		}
-
-		safeName, nameErr := componentNameFromSection(section)
-		if nameErr != nil {
-			fmt.Fprintf(os.Stderr, "Error: cannot determine canonical name for component %q: %v\n", title, nameErr)
+	for _, name := range componentNames {
+		data, err := os.ReadFile(filepath.Join(componentsDir, name+".md"))
+		canonicalName, nameErr := componentNameFromSection(string(data))
+		if err != nil || nameErr != nil || canonicalName != name {
+			fmt.Fprintf(os.Stderr, "Invalid component summary for %s\n", name)
 			componentGenerationFailed = true
-			continue
 		}
-		if seenComponentNames[safeName] {
-			fmt.Fprintf(os.Stderr, "Error: multiple component sections resolve to %s.md\n", safeName)
-			componentGenerationFailed = true
-			continue
-		}
-		seenComponentNames[safeName] = true
-
-		filePath := filepath.Join(componentsDir, safeName+".md")
-		fileContent := strings.TrimSpace(section) + "\n"
-
-		if err := os.WriteFile(filePath, []byte(fileContent), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", filePath, err)
-			componentGenerationFailed = true
-			continue
-		}
-
-		fmt.Fprintf(os.Stderr, "Generated %s.md\n", safeName)
-		componentNames = append(componentNames, safeName)
-		count++
 	}
-
-	fmt.Fprintf(os.Stderr, "Successfully generated %d component files.\n", count)
 
 	fmt.Fprintf(os.Stderr, "Downloading detailed documentation for %d components...\n", len(componentNames))
-	docsCount := 0
-	for _, name := range componentNames {
-		url := detailedDocURL(name)
-		data, dlErr := downloadFile(client, url)
-		if dlErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not download detailed doc for %s: %v\n", name, dlErr)
-			continue
-		}
-		docPath := filepath.Join(docsDir, name+".md")
-		if writeErr := os.WriteFile(docPath, data, 0o644); writeErr != nil {
-			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", docPath, writeErr)
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "Downloaded detailed doc: %s.md\n", name)
-		docsCount++
-	}
+	docsCount := downloadDocuments(client, docsDir, componentDocs)
 	fmt.Fprintf(os.Stderr, "Successfully downloaded %d detailed documentation files.\n", docsCount)
 
 	colorsGenerated := false
-	sectionRe := regexp.MustCompile(`(?m)^## daisyUI 5 colors\s*$`)
-	sectionLoc := sectionRe.FindStringIndex(content)
-	if sectionLoc == nil {
-		fmt.Fprintln(os.Stderr, "WARNING: '## daisyUI 5 colors' section not found in llms.txt")
+	colorsData, err := downloadFile(client, sourceURL(version, "skills/daisyui/colors/SKILL.md"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not download colors: %v\n", err)
 	} else {
-		nextSectionRe := regexp.MustCompile(`(?m)^## `)
-		nextLoc := nextSectionRe.FindStringIndex(content[sectionLoc[1]:])
-		var colorsSection string
-		if nextLoc == nil {
-			colorsSection = content[sectionLoc[0]:]
-		} else {
-			colorsSection = content[sectionLoc[0] : sectionLoc[1]+nextLoc[0]]
+		colorsData, err = extractColors(colorsData)
+		if err == nil {
+			err = os.WriteFile(colorsFilePath, colorsData, 0o644)
 		}
-		colorsSection = strings.TrimSpace(colorsSection) + "\n"
-		if err := os.WriteFile(colorsFilePath, []byte(colorsSection), 0o644); err != nil {
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing colors.md: %v\n", err)
 		} else {
 			fmt.Fprintln(os.Stderr, "Generated colors.md")
@@ -198,42 +134,59 @@ func run() error {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Downloading %d guide documentation pages...\n", len(guideDocs))
-	guideCount := 0
-	for _, doc := range guideDocs {
-		data, dlErr := downloadFile(client, doc.url)
-		if dlErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not download guide doc %s: %v\n", doc.name, dlErr)
-			continue
-		}
-		docPath := filepath.Join(guideDir, doc.name+".md")
-		if writeErr := os.WriteFile(docPath, data, 0o644); writeErr != nil {
-			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", docPath, writeErr)
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "Downloaded guide doc: %s.md\n", doc.name)
-		guideCount++
+	guideDocs := make([]documentDownload, 0, len(guideNames))
+	for _, name := range guideNames {
+		guideDocs = append(guideDocs, documentDownload{name, sourceURL(version, "packages/docs/src/routes/(routes)/docs/"+name+"/+page.md")})
 	}
+	fmt.Fprintf(os.Stderr, "Downloading %d guide documentation pages...\n", len(guideDocs))
+	guideCount := downloadDocuments(client, guideDir, guideDocs)
 	fmt.Fprintf(os.Stderr, "Successfully downloaded %d guide documentation pages.\n", guideCount)
 
 	if err := validateGeneratedDocumentation(count, componentGenerationFailed, docsCount, guideCount, len(guideDocs), colorsGenerated); err != nil {
 		return fmt.Errorf("generated documentation is incomplete; existing files were left unchanged: %w", err)
 	}
 
-	if err := replaceDir(filepath.Join(cwd, "components"), componentsDir); err != nil {
-		return fmt.Errorf("cannot replace components directory: %w", err)
-	}
-	if err := replaceDir(filepath.Join(cwd, "docs"), docsDir); err != nil {
-		return fmt.Errorf("cannot replace docs directory: %w", err)
-	}
-	if err := replaceDir(filepath.Join(cwd, "guide"), guideDir); err != nil {
-		return fmt.Errorf("cannot replace guide directory: %w", err)
-	}
-	if err := replaceFile(filepath.Join(cwd, "colors.md"), colorsFilePath); err != nil {
-		return fmt.Errorf("cannot replace colors.md: %w", err)
+	if err := replaceGeneratedDocumentation(cwd, tempDir); err != nil {
+		return fmt.Errorf("cannot replace generated documentation: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "Replaced generated documentation files.")
 	return nil
+}
+
+func parseVersion(value string) (string, error) {
+	version := strings.TrimSpace(value)
+	if !versionRe.MatchString(version) {
+		return "", fmt.Errorf("daisyui.version must contain a stable daisyUI 5 release such as 5.7.50")
+	}
+	return version, nil
+}
+
+func componentNamesFromIndex(index string) ([]string, error) {
+	var names []string
+	seen := make(map[string]bool)
+	for _, match := range componentIndexLinkRe.FindAllStringSubmatch(index, -1) {
+		name := match[1]
+		if !componentNameRe.MatchString(name) {
+			return nil, fmt.Errorf("unsafe component name %q", name)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("duplicate component %q", name)
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("no component links found")
+	}
+	return names, nil
+}
+
+func extractColors(data []byte) ([]byte, error) {
+	loc := colorsHeadingRe.FindIndex(data)
+	if loc == nil {
+		return nil, fmt.Errorf("daisyUI 5 colors heading not found")
+	}
+	return append(bytes.TrimSpace(data[loc[0]:]), '\n'), nil
 }
 
 func downloadFile(client *http.Client, url string) ([]byte, error) {
@@ -254,10 +207,45 @@ func downloadFile(client *http.Client, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(strings.TrimSpace(string(data))) == 0 {
+	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, fmt.Errorf("response body is empty")
 	}
 	return data, nil
+}
+
+// Fetch a bounded number of pages in parallel, then report results in input order.
+func downloadDocuments(client *http.Client, dir string, documents []documentDownload) int {
+	results := make([]error, len(documents))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range min(downloadWorkers, len(documents)) {
+		workers.Go(func() {
+			for i := range jobs {
+				doc := documents[i]
+				data, err := downloadFile(client, doc.url)
+				if err == nil {
+					err = os.WriteFile(filepath.Join(dir, doc.name+".md"), data, 0o644)
+				}
+				results[i] = err
+			}
+		})
+	}
+	for i := range documents {
+		jobs <- i
+	}
+	close(jobs)
+	workers.Wait()
+
+	count := 0
+	for i, err := range results {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not save %s.md: %v\n", documents[i].name, err)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "Downloaded %s.md\n", documents[i].name)
+		count++
+	}
+	return count
 }
 
 func componentNameFromSection(section string) (string, error) {
@@ -298,38 +286,53 @@ func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 	return data, nil
 }
 
-func replaceDir(dst, src string) error {
-	backup := backupPath(dst)
-	if err := os.Rename(dst, backup); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("backup existing directory: %w", err)
+// Keep every backup until the entire set is installed, so a failed rename does
+// not leave component summaries, detailed docs, and guides from different runs.
+func replaceGeneratedDocumentation(dstRoot, srcRoot string) error {
+	type replacement struct {
+		dst, src, backup    string
+		backedUp, installed bool
 	}
-	if err := os.Rename(src, dst); err != nil {
-		if restoreErr := os.Rename(backup, dst); restoreErr != nil && !os.IsNotExist(restoreErr) {
-			return fmt.Errorf("replace directory: %w; restore failed: %v", err, restoreErr)
+	var replacements []*replacement
+	rollback := func(cause error) error {
+		for _, r := range slices.Backward(replacements) {
+			if r.installed {
+				if err := os.Rename(r.dst, r.src); err != nil {
+					cause = errors.Join(cause, fmt.Errorf("cannot undo replacement of %s; original retained at %s: %w", r.dst, r.backup, err))
+					continue
+				}
+			}
+			if r.backedUp {
+				if err := os.Rename(r.backup, r.dst); err != nil {
+					cause = errors.Join(cause, fmt.Errorf("cannot restore %s; original retained at %s: %w", r.dst, r.backup, err))
+				}
+			}
 		}
-		return fmt.Errorf("replace directory: %w", err)
+		return cause
 	}
-	if err := os.RemoveAll(backup); err != nil {
-		return fmt.Errorf("remove backup: %w", err)
-	}
-	return nil
-}
-
-func replaceFile(dst, src string) error {
-	backup := backupPath(dst)
-	if err := os.Rename(dst, backup); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("backup existing file: %w", err)
-	}
-	if err := os.Rename(src, dst); err != nil {
-		if restoreErr := os.Rename(backup, dst); restoreErr != nil && !os.IsNotExist(restoreErr) {
-			return fmt.Errorf("replace file: %w; restore failed: %v", err, restoreErr)
+	for _, name := range []string{"components", "docs", "guide", "colors.md"} {
+		r := &replacement{dst: filepath.Join(dstRoot, name), src: filepath.Join(srcRoot, name)}
+		r.backup = backupPath(r.dst)
+		replacements = append(replacements, r)
+		if err := os.Rename(r.dst, r.backup); err == nil {
+			r.backedUp = true
+		} else if !os.IsNotExist(err) {
+			return rollback(fmt.Errorf("backup %s: %w", name, err))
 		}
-		return fmt.Errorf("replace file: %w", err)
+		if err := os.Rename(r.src, r.dst); err != nil {
+			return rollback(fmt.Errorf("replace %s: %w", name, err))
+		}
+		r.installed = true
 	}
-	if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove backup: %w", err)
+	var cleanupErr error
+	for _, r := range replacements {
+		if r.backedUp {
+			if err := os.RemoveAll(r.backup); err != nil {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("documentation replaced, but cannot remove backup %s: %w", r.backup, err))
+			}
+		}
 	}
-	return nil
+	return cleanupErr
 }
 
 func backupPath(dst string) string {

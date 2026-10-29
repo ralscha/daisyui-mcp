@@ -36,11 +36,13 @@ type ThemeInput struct {
 }
 
 var (
-	oklchRegex       = regexp.MustCompile(`(?i)^oklch\(\s*([\d.]+)(%)?\s+([\d.]+)\s+([\d.]+)\s*\)$`)
+	oklchRegex       = regexp.MustCompile(`(?i)^oklch\(\s*(` + cssNumber + `)(%)?\s+(` + cssNumber + `)(%)?\s+(` + cssNumber + `)(deg|grad|rad|turn)?\s*\)$`)
 	themeNameRegex   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
 	cssLengthRegex   = regexp.MustCompile(`(?i)^(?:0(?:\.0+)?|(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ex|ch|cap|ic|lh|rlh|vw|vh|vi|vb|vmin|vmax|svw|svh|lvw|lvh|dvw|dvh|cm|mm|q|in|pc|pt|%))$`)
 	themeToggleRegex = regexp.MustCompile(`^(?:0(?:\.0+)?|1(?:\.0+)?)$`)
 )
+
+const cssNumber = `[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?`
 
 func parseColor(s string, defaultColor colorful.Color) colorful.Color {
 	c, _ := parseColorWithStatus(s, defaultColor)
@@ -54,19 +56,38 @@ func parseColorWithStatus(s string, defaultColor colorful.Color) (colorful.Color
 	}
 	s = strings.TrimSuffix(s, ";")
 
-	if matches := oklchRegex.FindStringSubmatch(s); len(matches) == 5 {
+	if matches := oklchRegex.FindStringSubmatch(s); len(matches) == 7 {
 		l, lErr := strconv.ParseFloat(matches[1], 64)
 		if matches[2] == "%" {
 			l = l / 100.0
-		} else if l > 1.0 {
-			l = l / 100.0
 		}
 		c, cErr := strconv.ParseFloat(matches[3], 64)
-		h, hErr := strconv.ParseFloat(matches[4], 64)
-		if lErr != nil || cErr != nil || hErr != nil || l < 0 || l > 1 || c < 0 || h < 0 || h > 360 {
+		if matches[4] == "%" {
+			c = c / 250.0
+		}
+		h, hErr := strconv.ParseFloat(matches[5], 64)
+		if lErr != nil || cErr != nil || hErr != nil || l < 0 || l > 1 || c < 0 {
 			return defaultColor, false
 		}
-		return colorful.OkLch(l, c, h), true
+		switch strings.ToLower(matches[6]) {
+		case "grad":
+			h *= 0.9
+		case "rad":
+			h *= 180 / math.Pi
+		case "turn":
+			h *= 360
+		}
+		h = math.Mod(math.Mod(h, 360)+360, 360)
+		color := colorful.OkLch(l, c, h)
+		// Extremely large but parseable input can overflow the color-space
+		// conversion, producing invalid CSS and unencodable JSON contrast ratios.
+		cl, cc, ch := color.OkLch()
+		for _, value := range []float64{color.R, color.G, color.B, cl, cc, ch} {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return defaultColor, false
+			}
+		}
+		return color, true
 	}
 
 	if !strings.HasPrefix(s, "#") && !strings.HasPrefix(s, "rgb") && !strings.HasPrefix(s, "hsl") && !strings.HasPrefix(s, "oklch") {
@@ -108,21 +129,26 @@ func generateContentColor(c colorful.Color) colorful.Color {
 
 func cssColor(c colorful.Color) colorful.Color {
 	l, chroma, h := c.OkLch()
-	if chroma < 0.0001 || math.IsNaN(h) {
+	chroma = math.Round(chroma*1_000) / 1_000
+	if chroma == 0 || math.IsNaN(h) {
 		h = 0
 	}
 	return colorful.OkLch(
 		math.Round(l*100_000)/100_000,
-		math.Round(chroma*1_000)/1_000,
+		chroma,
 		math.Round(h*1_000)/1_000,
 	)
 }
 
 func formatOklch(c colorful.Color) string {
-	l, chroma, h := cssColor(c).OkLch()
+	l, chroma, h := c.OkLch()
+	chroma = math.Round(chroma*1_000) / 1_000
+	if chroma == 0 || math.IsNaN(h) {
+		h = 0
+	}
 	lStr := strconv.FormatFloat(math.Round(l*100_000)/1_000, 'f', -1, 64)
 	cStr := strconv.FormatFloat(chroma, 'f', -1, 64)
-	hStr := strconv.FormatFloat(h, 'f', -1, 64)
+	hStr := strconv.FormatFloat(math.Round(h*1_000)/1_000, 'f', -1, 64)
 
 	return fmt.Sprintf("oklch(%s%% %s %s)", lStr, cStr, hStr)
 }
@@ -302,7 +328,21 @@ func GenerateTheme(input ThemeInput) GeneratedTheme {
 			ContrastRatio: math.Round(ratio*100) / 100,
 		})
 		if ratio < 4.5 {
-			warnings = append(warnings, fmt.Sprintf("%s and %s-content have a contrast ratio of %.2f:1, below the WCAG AA text target of 4.5:1.", pair.name, pair.name, ratio))
+			contentName := pair.name + "-content"
+			if pair.name == "base-100" {
+				contentName = "base-content"
+			}
+			warnings = append(warnings, fmt.Sprintf("%s and %s have a contrast ratio of %.2f:1, below the WCAG AA text target of 4.5:1.", pair.name, contentName, ratio))
+		}
+	}
+	// All base shades share base-content. A foreground that meets AA against
+	// base-100 can still miss it against the automatically derived shades.
+	for _, base := range []struct {
+		name  string
+		color colorful.Color
+	}{{"base-200", base200}, {"base-300", base300}} {
+		if ratio := contrastRatio(cssColor(base.color), cssColor(baseContent)); ratio < 4.5 {
+			warnings = append(warnings, fmt.Sprintf("%s and base-content have a contrast ratio of %.2f:1, below the WCAG AA text target of 4.5:1.", base.name, ratio))
 		}
 	}
 

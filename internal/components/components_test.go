@@ -1,6 +1,10 @@
 package components_test
 
 import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -126,6 +130,32 @@ func TestGetContentFS_NotFound(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for nonexistent component")
 	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("error = %v, want wrapped fs.ErrNotExist", err)
+	}
+}
+
+func TestGetContentFSRootDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "button.md"), []byte(buttonMD), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fsys := os.DirFS(dir)
+	index := components.LoadIndexFS(fsys, ".")
+	if len(index) != 1 || index["button"] == "" {
+		t.Fatalf("root directory index = %v, want button", index)
+	}
+	content, err := components.GetContentFS(fsys, ".", " BUTTON ")
+	if err != nil || content != buttonMD {
+		t.Fatalf("GetContentFS(root) = %q, %v", content, err)
+	}
+}
+
+func TestGetContentFSRejectsEmptyName(t *testing.T) {
+	fsys := fstest.MapFS{"components/.md": {Data: []byte("hidden")}}
+	if _, err := components.GetContentFS(fsys, "components", " "); err == nil {
+		t.Fatal("empty component name was accepted")
+	}
 }
 
 func TestGetContentFS_PathTraversalRejected(t *testing.T) {
@@ -190,6 +220,16 @@ func TestSuggestions_NoMatch(t *testing.T) {
 	got := components.Suggestions(index, "zzz")
 	if len(got) != 0 {
 		t.Errorf("expected no suggestions for completely unrelated name, got %v", got)
+	}
+}
+
+func TestSuggestionsNormalizesQuery(t *testing.T) {
+	index := map[string]string{"button": "", "card": ""}
+	if got := components.Suggestions(index, " BUTTO "); !slices.Equal(got, []string{"button"}) {
+		t.Fatalf("Suggestions() = %v, want [button]", got)
+	}
+	if got := components.Suggestions(index, " "); len(got) != 0 {
+		t.Fatalf("Suggestions(empty) = %v, want no arbitrary suggestions", got)
 	}
 }
 

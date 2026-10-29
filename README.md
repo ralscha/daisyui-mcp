@@ -25,9 +25,12 @@
 | `generate_theme` | Generate a complete daisyUI 5 custom theme CSS based on hex or OKLCH colors |
 | `generate_theme_from_image` | Extract a color palette from a local or remote image and generate a complete daisyUI 5 custom theme CSS |
 | `list_recipes` | List curated recipes for common daisyUI application compositions |
+| `search_recipes` | Search recipe names and descriptions, ordered by relevance |
 | `get_recipe` | Get an accessible composition recipe with HTML and implementation notes |
 
 Tool responses retain human-readable text and also include structured content. Component listings are returned as arrays; documentation includes page metadata; and generated themes include CSS, semantic color pairs, contrast ratios, and warnings.
+
+Both search tools accept a required `query` and an optional `limit` (default 10, maximum 50). For example, `search_recipes` with `{"query":"login","limit":5}` finds authentication compositions.
 
 ### Detailed documentation pages
 
@@ -69,17 +72,22 @@ cd daisyui-mcp
 task build
 ```
 
-`task build` refreshes the generated daisyUI documentation before compiling, so it needs network access. The resulting `bin/daisyui-server` (or `bin/daisyui-server.exe` on Windows) is the only file you need to deploy.
+`task build` fetches the pinned daisyUI documentation before compiling, so it needs network access. The resulting `bin/daisyui-server` (or `bin/daisyui-server.exe` on Windows) is the only file you need to deploy. To build without Task, run `go run ./cmd/update` followed by `go build -o bin/daisyui-server ./cmd/server` (use `.exe` on Windows).
+
+Generated documentation is ignored by Git. On a fresh checkout, run `task update:docs` before `go test ./...` or direct Go builds. Once generated, tests and direct builds can run offline using the downloaded Go modules.
 
 #### Other task commands
 
 | Command | Description |
 |---------|-------------|
 | `task build` | Build all binaries into `bin/` |
-| `task update` | Fetch latest DaisyUI docs then rebuild |
+| `task update` | Refresh pinned DaisyUI docs and rebuild |
+| `task update:docs` | Fetch documentation for the version in `daisyui.version` |
 | `task test` | Run all tests |
 | `task format` | Format all Go source files |
-| `task lint` | Run golangci-lint (requires Docker) |
+| `task lint` | Run a locally installed golangci-lint |
+
+To upgrade daisyUI, change `daisyui.version` to a published daisyUI 5 release number and run `task update`. The updater downloads pages concurrently, validates the complete result, and rolls back replacements if installing a file fails. CI checks builds and tests on Windows and Linux, with the Go race detector on Linux. Releases run documentation generation, module verification, tests, and static checks before packaging.
 
 ### Option B — Download a pre-built binary
 
@@ -110,11 +118,13 @@ Override directories should contain Markdown files named after component slugs, 
 
 ## Theme generation
 
-`generate_theme` accepts hex colors such as `#ff0000` or `ff0000`, plus OKLCH values such as `oklch(60% 0.2 30)`. It derives matching WCAG AA `*-content` colors and `base-200`/`base-300` values automatically. Both theme tools accept `name`, `default`, and `prefers_dark` to configure the generated daisyUI theme declaration.
+`generate_theme` accepts hex colors such as `#ff0000` or `ff0000`, plus OKLCH values such as `oklch(60% 0.2 30)`. OKLCH also supports percentage chroma and hue angle units (`deg`, `grad`, `rad`, `turn`), including negative and wrapped angles. It derives matching WCAG AA `*-content` colors and `base-200`/`base-300` values automatically. Both theme tools accept `name`, `default`, and `prefers_dark` to configure the generated daisyUI theme declaration.
 
 `generate_theme_from_image` accepts exactly one of `image_path` or `image_url`. Image reads are bounded to keep palette extraction predictable. Remote URLs must use HTTP(S), may not contain credentials, and must resolve to public network addresses; redirects receive the same checks.
 
-Theme tools return the generated CSS as text and as structured data. Structured results include theme metadata, each semantic color and its `*-content` partner, their contrast ratio, extracted image colors when applicable, and validation warnings.
+Image palettes use deterministic, alpha-weighted sampling of at most 16,384 pixels. If the sampling grid misses all visible pixels, a fallback scan collects up to 16,384 visible pixels so sparse transparent artwork still works. Transparent pixels are ignored, grayscale images are supported, and fully transparent images return an error. Supported formats are PNG, JPEG, GIF, and WebP, with limits of 10 MiB and 16 million decoded pixels.
+
+Theme tools return the generated CSS as text and as structured data. Structured results include theme metadata, each semantic color and its `*-content` partner, their contrast ratio, extracted image colors when applicable, and validation warnings. Contrast warnings also cover the shared `base-content` color on derived `base-200` and `base-300` backgrounds.
 
 ## Disclaimer
 
